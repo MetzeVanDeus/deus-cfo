@@ -222,14 +222,19 @@ def simulate_portfolio(
         profit = 0.0
         durations = []
         for group_positions in groups.values():
-            lengths = [len(item.historical_returns) for _, item in group_positions]
-            draw_index = rng.randrange(max(lengths))
+            # Draw one shared percentile for the correlation group, rather than
+            # one integer index based on its longest history.  Applying an
+            # index modulo a shorter history over-samples its early entries
+            # whenever sample counts are not exact multiples of one another.
+            draw_percentile = rng.random()
             for position, item in group_positions:
                 returns = item.historical_returns
-                value = returns[draw_index % len(returns)]
+                return_index = min(int(draw_percentile * len(returns)), len(returns) - 1)
+                value = returns[return_index]
                 profit += position.capital * float(value) / 100
                 samples = item.duration_distribution
-                durations.append(float(samples[draw_index % len(samples)]))
+                duration_index = min(int(draw_percentile * len(samples)), len(samples) - 1)
+                durations.append(float(samples[duration_index]))
         profits.append(profit)
         completion.append(max(durations, default=0.0))
     return PortfolioSimulation(
