@@ -501,21 +501,14 @@ async def create_capital_plan(request: CapitalPlanRequest):
                 for item in current
             ]
             market = _latest_market_context(await market_data.get_all_latest(request.league))
-            registry = strategies.default_transformation_registry()
-            transformation_routes = strategies.TransformationStrategyProvider(registry).evaluate({
-                "league": request.league,
-                **market,
-            })
-            definitions = {item["id"]: item for item in registry.records()}
-            candidates.extend(
-                route.to_investable(
-                    status=definitions[route.transformation_id]["status"],
-                    max_batch=definitions[route.transformation_id]["max_batch"],
-                    bankroll=request.bankroll.total_net_worth,
-                    chaos_per_divine=chaos_per_divine,
-                )
-                for route in transformation_routes
+            provider = strategies.TransformationStrategyProvider(
+                strategies.default_transformation_registry()
             )
+            candidates.extend(provider.discover({
+                "league": request.league,
+                "bankroll": request.bankroll.total_net_worth,
+                **market,
+            }))
         plan = capital.build_capital_plan(
             request.bankroll,
             request.preferences,
@@ -801,6 +794,7 @@ async def get_profit_routes(league: str, category: str | None = None):
         "category": category,
         **market,
     })
+    routes = [route for route in routes if route.expected_net_profit > 0]
     return {
         "league": league,
         "category": category,

@@ -63,33 +63,34 @@ class ProfitRoute(BaseModel):
         now = datetime.now(timezone.utc)
         expires_at = (now + timedelta(hours=duration)).isoformat(timespec="seconds")
         created_at = now.isoformat(timespec="seconds")
-        input_cost = self.total_input_cost / chaos_per_divine
-        output_value = self.realistic_output_value / chaos_per_divine
-        expected_profit = self.expected_net_profit / chaos_per_divine
+        entry_chaos = self.total_input_cost
+        exit_chaos = self.realistic_output_value
+        expected_profit_chaos = self.expected_net_profit
+        entry_divine = entry_chaos / chaos_per_divine
         return InvestableOpportunity(
             id=self.transformation_id,
             strategy_type="transformation",
             entry_item=self.inputs[0]["item"] if self.inputs else self.transformation_id,
             exit_item=self.outputs[0]["item"] if self.outputs else None,
             category=self.category,
-            current_price=input_cost,
-            realistic_entry_price=input_cost,
-            realistic_exit_price=output_value,
-            expected_return=self.roi,
-            expected_profit_per_unit=expected_profit,
+            current_price=entry_chaos,
+            realistic_entry_price=entry_chaos,
+            realistic_exit_price=exit_chaos,
+            expected_return=self.roi * 100,
+            expected_profit_per_unit=expected_profit_chaos / chaos_per_divine,
             expected_profit_per_divine_hour=self.profit_per_divine_hour,
             win_probability=max(0.0, min(1.0, self.confidence)),
             expected_duration=duration,
             duration_distribution=[duration],
-            downside_percentile=-self.execution_risk,
-            upside_percentile=max(0.0, self.roi),
+            downside_percentile=-self.execution_risk * 100,
+            upside_percentile=max(0.0, self.roi * 100),
             historical_sample_size=0,
             confidence=self.confidence,
             liquidity=self.liquidity,
             execution_effort=float(len(self.execution_steps)),
-            minimum_capital=input_cost,
-            maximum_reasonable_capital=input_cost * max_batch,
-            opportunity_capacity=self.capacity * input_cost,
+            minimum_capital=entry_divine,
+            maximum_reasonable_capital=entry_divine * max_batch,
+            opportunity_capacity=self.capacity * entry_divine,
             correlation_group=self.strategy_family,
             created_at=created_at,
             last_validated_at=created_at,
@@ -102,7 +103,6 @@ class ProfitRoute(BaseModel):
                 "allocation_cap": bankroll * 0.02 if status == StrategyLifecycle.EXPERIMENTAL.value else bankroll,
                 "source": self.source,
                 "verification_metadata": self.verification_metadata,
-
             },
         )
 class StrategyLifecycle(StrEnum):
@@ -226,6 +226,11 @@ def validate_transformation(record: Mapping[str, Any]) -> dict[str, Any]:
             raise ValueError(f"{name} must be non-negative")
     if result["sale_fee_rate"] >= 1 or result["output_discount_rate"] >= 1:
         raise ValueError("sale and output discounts must be below 1")
+    if "strategy_confidence" in result and (
+        not isinstance(result["strategy_confidence"], (int, float))
+        or not 0 <= result["strategy_confidence"] <= 1
+    ):
+        raise ValueError("strategy_confidence must be between 0 and 1")
     return result
 
 
@@ -290,15 +295,18 @@ class TransformationStrategyProvider:
             cost_info = priced[:len(all_costs)]
             output_info = priced[len(all_costs):]
             fixed_count = len(recipe["inputs"]) + len(recipe["deterministic_costs"])
-            cost = sum(item["quantity"] * info["price"] for item, info in zip(all_costs[:fixed_count], cost_info[:fixed_count]))
+            cost = sum(
+                item["quantity"] * info["price"]
+                for item, info in zip(all_costs[:fixed_count], cost_info[:fixed_count], strict=True)
+            )
             cost += sum(
                 item["quantity"] * item["probability"] * info["price"]
-                for item, info in zip(recipe["probabilistic_costs"], cost_info[fixed_count:])
+                for item, info in zip(recipe["probabilistic_costs"], cost_info[fixed_count:], strict=True)
             )
             discount = float(recipe["output_discount_rate"])
             output_value = sum(
                 item["quantity"] * item["probability"] * info["price"] * (1 - discount)
-                for item, info in zip(recipe["outputs"], output_info)
+                for item, info in zip(recipe["outputs"], output_info, strict=True)
             )
             if cost <= 0 or output_value <= 0:
                 continue
@@ -323,11 +331,22 @@ class TransformationStrategyProvider:
             capacity = float(recipe["max_batch"])
             volumes = [
                 info["volume"] / item["quantity"]
-                for item, info in zip(all_costs, cost_info)
+                for item, info in zip(all_costs, cost_info, strict=True)
                 if info.get("volume") is not None and info["volume"] > 0
             ]
             if volumes:
                 capacity = min(capacity, max(0.0, min(volumes)))
+            component_volumes = {
+                f"{item.get('category') or recipe['category']}:{item['item']}": info["volume"]
+                for item, info in zip(components, priced, strict=True)
+                if info.get("volume") is not None and info["volume"] > 0
+            }
+            liquidity_volume = min(component_volumes.values()) if component_volumes else 0.0
+            liquidity = {
+                "tier": validation.liquidity_tier(liquidity_volume),
+                "volume": liquidity_volume,
+                "components": component_volumes,
+            }
             reasons = [
                 "deterministic finite-outcome transformation",
                 f"definition source: {recipe['source']} ({recipe['verified_version']})",
@@ -359,6 +378,7 @@ class TransformationStrategyProvider:
                 pricing_confidence=pricing_confidence,
                 strategy_confidence=strategy_confidence,
                 execution_risk=execution_risk,
+                liquidity=liquidity,
                 reasons=reasons,
                 source=source,
                 verified_version=recipe["verified_version"],
@@ -379,14 +399,16 @@ class TransformationStrategyProvider:
     def discover(self, context: Mapping[str, Any]) -> Sequence[InvestableOpportunity]:
         bankroll = float(context.get("bankroll", 0) or 0)
         chaos_per_divine = float(context.get("chaos_per_divine", 1) or 1)
+        definitions = {record["id"]: record for record in self.registry.records()}
         return [
             route.to_investable(
-                status=self.registry._records[route.transformation_id]["status"],
-                max_batch=self.registry._records[route.transformation_id]["max_batch"],
+                status=definitions[route.transformation_id]["status"],
+                max_batch=definitions[route.transformation_id]["max_batch"],
                 bankroll=bankroll,
                 chaos_per_divine=chaos_per_divine,
             )
             for route in self.evaluate(context)
+            if route.expected_net_profit > 0
         ]
 
 

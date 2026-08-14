@@ -4,7 +4,7 @@
     "name": "Experimental Divine to Chaos observation",
     "strategy_family": "currency_conversion",
     "category": "Currency",
-    "status": "Experimental",
+    "status": "Rejected",
     "experimental_note": "Schema fixture only; not a profitability claim. Validate the real process and execution before any use.",
     "source": "manual_schema_fixture",
     "verified_version": "unverified",

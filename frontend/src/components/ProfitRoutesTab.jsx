@@ -10,6 +10,8 @@ const value = (item) => {
   return String(item)
 }
 const percent = (item) => item == null ? '—' : `${(Number(item) <= 1 ? Number(item) * 100 : Number(item)).toFixed(1)}%`
+const ratioPercent = (item) => item == null ? '—' : `${(Number(item) * 100).toFixed(1)}%`
+const tone = (item) => Number(item) < 0 ? 'negative' : 'positive'
 const list = (items) => Array.isArray(items) ? items : items == null ? [] : [items]
 
 export function ProfitRoutesTab({ selectedLeague }) {
@@ -43,10 +45,10 @@ function RouteCard({ route }) {
   return <article className="terminal-panel profit-route">
     <div className="panel-title"><div><div className="eyebrow">{route.transformation_id || 'TRANSFORMATION'}</div><h2>{route.name || 'Unnamed route'}</h2></div><span>{route.source ? `SOURCE · ${route.source}` : 'BACKEND EVALUATION'}</span></div>
     <div className="route-metrics metric-grid">
-      <Metric label="Expected net" value={value(route.expected_net_profit)} tone="positive" />
-      <Metric label="ROI" value={percent(route.roi)} tone="positive" />
+      <Metric label="Expected net" value={value(route.expected_net_profit)} tone={tone(route.expected_net_profit)} />
+      <Metric label="ROI" value={ratioPercent(route.roi)} tone={tone(route.roi)} />
       <Metric label="Capital required" value={value(route.capital_required)} />
-      <Metric label="Profit / hour" value={value(route.profit_per_hour)} tone="positive" />
+      <Metric label="Profit / hour" value={value(route.profit_per_hour)} tone={tone(route.profit_per_hour)} />
       <Metric label="Capacity" value={value(route.capacity)} />
       <Metric label="Execution + sale" value={`${value(route.expected_execution_time)} + ${value(route.expected_sale_time)}`} />
     </div>

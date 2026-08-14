@@ -1,5 +1,7 @@
 import asyncio
 
+import pytest
+
 import main
 from strategies import TransformationRegistry, TransformationStrategyProvider
 
@@ -37,6 +39,9 @@ def _registry():
         "source": "test-definition",
         "verified_version": "v1",
         "max_batch": 3,
+        "sale_fee_rate": 0.1,
+        "output_discount_rate": 0.2,
+        "strategy_confidence": 0.9,
     }])
 
 
@@ -51,12 +56,12 @@ def test_profit_route_calculation_preserves_price_provenance():
     })
     route = routes[0]
     assert route.total_input_cost == 21
-    assert route.realistic_output_value == 31
-    assert route.gross_profit == 10
-    assert route.expected_net_profit == 10
-    assert route.roi == 10 / 21
-    assert route.profit_per_hour == 10 / 3
-    assert route.profit_per_divine_hour == (10 / 100) / 3
+    assert route.realistic_output_value == 24.8
+    assert route.gross_profit == pytest.approx(3.8)
+    assert route.expected_net_profit == pytest.approx(1.32)
+    assert route.roi == pytest.approx(1.32 / 21)
+    assert route.profit_per_hour == pytest.approx(1.32 / 3)
+    assert route.profit_per_divine_hour == pytest.approx((1.32 / 100) / 3)
     assert route.capacity == 3
     assert route.source == "test-market"
     assert route.verification_metadata["definition_source"] == "test-definition"
@@ -65,6 +70,16 @@ def test_profit_route_calculation_preserves_price_provenance():
     assert route.execution_steps == []
     assert route.pricing_confidence == 1
     assert route.execution_risk == 0.1
+    assert route.liquidity == {
+        "tier": "low",
+        "volume": 20,
+        "components": {
+            "Currency:A": 20,
+            "Currency:Chaos": 20,
+            "Currency:B": 20,
+            "Currency:C": 20,
+        },
+    }
 
 def test_profit_routes_api_uses_latest_market_rows(monkeypatch):
     rows = {
@@ -135,3 +150,63 @@ def test_profit_route_requires_every_market_component():
         "prices": prices,
         "price_records": prices,
     })
+
+
+def test_discover_adapts_allocator_units_and_filters_to_positive_routes():
+    rows = {item: _record(item, price) for item, price in (("A", 10), ("Chaos", 1), ("B", 40), ("C", 4))}
+    prices = {f"Currency:{item}": row for item, row in rows.items()}
+    opportunities = TransformationStrategyProvider(_registry()).discover({
+        "prices": prices,
+        "price_records": prices,
+        "chaos_per_divine": 100,
+        "bankroll": 50,
+    })
+    opportunity = opportunities[0]
+    assert opportunity.realistic_entry_price == 21
+    assert opportunity.realistic_exit_price == pytest.approx(24.8)
+    assert opportunity.expected_return == pytest.approx((1.32 / 21) * 100)
+    assert opportunity.expected_profit_per_unit == pytest.approx(1.32 / 100)
+    assert opportunity.minimum_capital == pytest.approx(21 / 100)
+    assert opportunity.maximum_reasonable_capital == pytest.approx(63 / 100)
+    assert opportunity.opportunity_capacity == pytest.approx(63 / 100)
+
+
+def test_scalar_prices_are_unverified():
+    prices = {"Currency:A": 10, "Currency:Chaos": 1, "Currency:B": 40, "Currency:C": 4}
+    route = TransformationStrategyProvider(_registry()).evaluate({
+        "prices": prices,
+        "price_records": {},
+    })[0]
+    assert route.pricing_confidence == 0
+    assert route.source == "request"
+    assert route.liquidity["volume"] == 0
+
+
+def test_invalid_strategy_confidence_is_rejected():
+    record = _registry().records()[0]
+    with pytest.raises(ValueError, match="strategy_confidence"):
+        TransformationRegistry([{**record, "strategy_confidence": 1.1}])
+    with pytest.raises(ValueError, match="strategy_confidence"):
+        TransformationRegistry([{**record, "strategy_confidence": "high"}])
+
+
+def test_loss_making_routes_remain_read_only_but_are_not_public_or_allocatable(monkeypatch):
+    rows = {item: _record(item, price) for item, price in (("A", 10), ("Chaos", 1), ("B", 1), ("C", 1))}
+    prices = {f"Currency:{item}": row for item, row in rows.items()}
+    provider = TransformationStrategyProvider(_registry())
+    context = {"prices": prices, "price_records": prices, "chaos_per_divine": 100}
+    routes = provider.evaluate(context)
+    assert routes and routes[0].expected_net_profit < 0
+    assert provider.discover(context) == []
+
+    async def latest(_league):
+        return {"Currency": [_record("Divine", 100), *rows.values()]}
+
+    monkeypatch.setattr(main.market_data, "get_all_latest", latest)
+    monkeypatch.setattr(main.strategies, "default_transformation_registry", _registry)
+    assert asyncio.run(main.get_profit_routes("Test", category="Currency"))["routes"] == []
+
+
+def test_placeholder_fixture_is_rejected():
+    record = next(iter(main.strategies.default_transformation_registry().records()))
+    assert record["status"] == "Rejected"
