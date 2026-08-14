@@ -500,6 +500,22 @@ async def create_capital_plan(request: CapitalPlanRequest):
                 )
                 for item in current
             ]
+            market = _latest_market_context(await market_data.get_all_latest(request.league))
+            registry = strategies.default_transformation_registry()
+            transformation_routes = strategies.TransformationStrategyProvider(registry).evaluate({
+                "league": request.league,
+                **market,
+            })
+            definitions = {item["id"]: item for item in registry.records()}
+            candidates.extend(
+                route.to_investable(
+                    status=definitions[route.transformation_id]["status"],
+                    max_batch=definitions[route.transformation_id]["max_batch"],
+                    bankroll=request.bankroll.total_net_worth,
+                    chaos_per_divine=chaos_per_divine,
+                )
+                for route in transformation_routes
+            )
         plan = capital.build_capital_plan(
             request.bankroll,
             request.preferences,
@@ -744,6 +760,51 @@ async def list_transformations():
     return {
         "transformations": list(registry.records()),
         "lifecycle": [lifecycle.value for lifecycle in strategies.StrategyLifecycle],
+    }
+
+
+def _latest_market_context(latest: dict) -> dict:
+    prices: dict[str, dict] = {}
+    price_records: dict[str, dict] = {}
+    for market_category, rows in latest.items():
+        for row in rows:
+            item_id = str(row.get("item_id") or "")
+            item_name = str(row.get("item_name") or item_id)
+            for item in {item_id, item_name} - {""}:
+                key = f"{market_category}:{item}"
+                prices[key] = row
+                price_records[key] = row
+                prices.setdefault(item, row)
+                price_records.setdefault(item, row)
+    divine = prices.get("Currency:Divine")
+    chaos = prices.get("Currency:Chaos")
+    chaos_per_divine = 0.0
+    if divine and chaos:
+        divine_price = divine.get("price_chaos")
+        chaos_price = chaos.get("price_chaos")
+        if divine_price and chaos_price and chaos_price > 0:
+            chaos_per_divine = divine_price / chaos_price
+    return {"prices": prices, "price_records": price_records, "chaos_per_divine": chaos_per_divine}
+
+
+@app.get("/api/profit-routes")
+async def get_profit_routes(league: str, category: str | None = None):
+    """Evaluate declarative transformations against the latest observed market."""
+    if category and category not in ALL_CATEGORIES and category != "Transformation":
+        raise HTTPException(status_code=400, detail=f"unknown category: {category}")
+    market = _latest_market_context(await market_data.get_all_latest(league))
+    provider = strategies.TransformationStrategyProvider(
+        strategies.default_transformation_registry()
+    )
+    routes = provider.evaluate({
+        "league": league,
+        "category": category,
+        **market,
+    })
+    return {
+        "league": league,
+        "category": category,
+        "routes": [route.model_dump() for route in sorted(routes, key=lambda route: route.expected_net_profit, reverse=True)],
     }
 
 
