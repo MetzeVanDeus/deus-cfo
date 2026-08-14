@@ -126,3 +126,16 @@ h3 { font-size:12px; font-weight:600; color:var(--muted); margin:0 0 9px; }
 @media (max-width:560px) { .topbar { height:44px; }.brand strong { font-size:13px; }.topnav button { font-size:11px; padding:0 7px; }.page-head,.decision,.form-actions { display:block; }.market-state { margin-top:12px; }.decision-meta { text-align:left; display:flex; margin-top:16px; }.metric-grid { grid-template-columns:repeat(2,1fr); }.form-row-main,.bankroll-grid,.preference-grid,.advanced-grid,.strategy-conditions,.raw-grid { grid-template-columns:1fr; }.form-actions .btn-primary { width:100%; margin-top:12px; }.allocation-legend,.distribution-summary { display:grid; grid-template-columns:repeat(2,1fr); } }
 @media (max-width:900px) { .paper-grid { grid-template-columns:1fr; }.real-form { grid-template-columns:repeat(2,1fr); }.paper-empty { display:block; } }
 @media (max-width:560px) { .real-form { grid-template-columns:1fr; }.paper-metrics { grid-template-columns:repeat(2,1fr); } }
+.profit-routes { display:grid; gap:10px; }
+.profit-route { padding:16px; }
+.profit-route .panel-title { align-items:flex-start; }
+.profit-route .panel-title h2 { margin-top:4px; }
+.route-metrics { margin:0 0 14px; grid-template-columns:repeat(6,1fr); }
+.route-columns,.route-bottom { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+.route-columns section,.route-bottom section { min-width:0; }
+.route-raw { display:block; padding:0; }
+.route-raw .raw-row { padding:7px 0; }
+.route-subhead { margin-top:16px; }
+.route-provenance { margin-top:14px; padding-top:10px; border-top:1px solid var(--line); color:var(--muted); font-size:10px; letter-spacing:.08em; }
+@media (max-width:900px) { .route-metrics { grid-template-columns:repeat(3,1fr); } }
+@media (max-width:560px) { .route-columns,.route-bottom { grid-template-columns:1fr; } .route-metrics { grid-template-columns:repeat(2,1fr); } }

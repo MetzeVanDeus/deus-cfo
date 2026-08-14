@@ -6,7 +6,6 @@ import pytest
 
 import database
 import portfolio
-from opportunity import InvestableOpportunity
 from strategies import TransformationRegistry, TransformationStrategyProvider, validate_transformation
 
 
@@ -292,15 +291,13 @@ def test_transformation_registry_rejects_unmodelled_and_incomplete_outcomes():
         })
 
 
-def test_transform_fixture_is_normalized_and_experimental():
+def test_transform_fixture_is_rejected_until_verified():
     registry = TransformationRegistry.from_json(Path(__file__).with_name("transformations.experimental.json"))
-    opportunities = TransformationStrategyProvider(registry).discover({"prices": {"Divine": 100, "Chaos": 110}, "bankroll": 50})
-    assert isinstance(opportunities[0], InvestableOpportunity)
-    assert opportunities[0].tier == "WATCH"
-    assert opportunities[0].strategy_status == "Experimental"
-    assert opportunities[0].experimental_allocation_cap == pytest.approx(.02)
-    assert opportunities[0].metadata["allocation_cap"] == pytest.approx(1)
-
+    provider = TransformationStrategyProvider(registry)
+    assert registry.records()[0]["status"] == "Rejected"
+    context = {"prices": {"Divine": 100, "Chaos": 110}, "bankroll": 50}
+    assert provider.evaluate(context) == []
+    assert provider.discover(context) == []
 
 def test_reallocation_churn_guard_accounts_for_costs():
     decision = portfolio.should_reallocate(0.08, 0.10, exit_cost=0.01, entry_cost=0.01, minimum_advantage=0.01)

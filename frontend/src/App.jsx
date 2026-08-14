@@ -5,6 +5,7 @@ import { SignalsTab } from './components/SignalsTab'
 import { ExplorerTab } from './components/ExplorerTab'
 import { CFOTab } from './components/CFOTab'
 import { StrategiesTab } from './components/StrategiesTab'
+import { ProfitRoutesTab } from './components/ProfitRoutesTab'
 
 const TABS = [
   { id: 'cfo', label: 'CFO' },
@@ -12,6 +13,7 @@ const TABS = [
   { id: 'signals', label: 'Signals' },
   { id: 'explorer', label: 'Explorer' },
   { id: 'strategies', label: 'Strategies' },
+  { id: 'profit-routes', label: 'Profit Routes' },
 ]
 
 function App() {
@@ -43,6 +45,7 @@ function App() {
       {activeTab === 'signals' && <SignalsTab selectedLeague={selectedLeague} />}
       {activeTab === 'explorer' && <ExplorerTab leagues={leagues} categories={categories} selectedLeague={selectedLeague} setSelectedLeague={setSelectedLeague} />}
       {activeTab === 'strategies' && <StrategiesTab leagues={leagues} categories={categories} selectedLeague={selectedLeague} setSelectedLeague={setSelectedLeague} />}
+      {activeTab === 'profit-routes' && <ProfitRoutesTab selectedLeague={selectedLeague} />}
     </main>
     <footer className="footer">DeusCFO <span>·</span> Market data from poe.ninja <span>·</span> Research terminal, not an execution venue</footer>
   </div>
