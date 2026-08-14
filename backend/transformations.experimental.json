@@ -1,0 +1,16 @@
+[
+  {
+    "id": "experimental_divine_chaos_observation",
+    "name": "Experimental Divine to Chaos observation",
+    "status": "Experimental",
+    "experimental_note": "Schema fixture only; not a profitability claim. Validate the real process and execution before any use.",
+    "inputs": [{"item": "Divine", "quantity": 1}],
+    "deterministic_costs": [{"item": "Divine", "quantity": 1}],
+    "probabilistic_costs": [],
+    "outputs": [{"item": "Chaos", "quantity": 1, "probability": 1.0}],
+    "expected_execution_time_hours": 1.0,
+    "requirements": {"manual_validation": true},
+    "risk_model": {"kind": "deterministic"},
+    "max_batch": 1
+  }
+]
