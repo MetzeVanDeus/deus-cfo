@@ -10,11 +10,31 @@ export function DashboardTab({ leagues, categories, selectedLeague, setSelectedL
   const [error, setError] = useState('')
   useEffect(() => {
     if (!selectedLeague) return
-    let cancelled = false; setLoading(true); setError('')
-    Promise.all([api.get('/snapshot/status'), api.get('/signals', { params: { league: selectedLeague, hours: 24 } })]).then(([status, signalResponse]) => {
-      if (!cancelled) { setOverview(status.data); setSignals(signalResponse.data); setLoading(false) }
-    }).catch(() => { if (!cancelled) { setError('Dashboard data unavailable'); setLoading(false) } })
-    return () => { cancelled = true }
+    let cancelled = false
+    const load = () => {
+      setError('')
+      Promise.all([
+        api.get('/snapshot/status'),
+        api.get('/signals', { params: { league: selectedLeague, hours: 24 } }),
+      ]).then(([status, signalResponse]) => {
+        if (!cancelled) {
+          setOverview(status.data)
+          setSignals(signalResponse.data)
+          setLoading(false)
+        }
+      }).catch(() => {
+        if (!cancelled) {
+          setError('Dashboard data unavailable')
+          setLoading(false)
+        }
+      })
+    }
+    load()
+    const interval = setInterval(load, 60_000)
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+    }
   }, [selectedLeague])
   const snapshot = overview?.last_snapshot_per_league?.[selectedLeague]
   const activeRegimes = signals.filter((signal) => signal.source === 'regime').length

@@ -5,20 +5,23 @@ import statistics
 from datetime import datetime, timedelta, timezone
 
 import database
-
+_EMPIRICAL_FILTER = (
+    "observation_type NOT IN ('ESTIMATED', 'SYNTHETIC')"
+    " AND lower(source) NOT LIKE '%synthetic%'"
+    " AND lower(source) NOT LIKE '%reconstructed%'"
+)
 
 def _iso_ago(hours: float) -> str:
     return (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat(timespec="seconds")
 
 
 async def get_price_history(league: str, category: str, item_id: str, hours: float = 24):
-    """(timestamp, price, volume) tuples for an item, oldest first."""
     db = await database.get_db()
     try:
         cur = await db.execute(
-            """SELECT timestamp, price_chaos, volume FROM snapshots
+            f"""SELECT timestamp, price_chaos, volume FROM snapshots
                WHERE league = ? AND category = ? AND item_id = ?
-                 AND timestamp >= ?
+                 AND timestamp >= ? AND {_EMPIRICAL_FILTER}
                ORDER BY timestamp ASC""",
             (league, category, item_id, _iso_ago(hours)),
         )
@@ -32,8 +35,9 @@ async def get_category_histories(league: str, category: str, hours: float = 24) 
     db = await database.get_db()
     try:
         cur = await db.execute(
-            """SELECT item_id, timestamp, price_chaos, volume FROM snapshots
+            f"""SELECT item_id, timestamp, price_chaos, volume FROM snapshots
                WHERE league = ? AND category = ? AND timestamp >= ?
+                 AND {_EMPIRICAL_FILTER}
                ORDER BY item_id, timestamp""",
             (league, category, _iso_ago(hours)),
         )
@@ -52,12 +56,12 @@ async def get_latest_prices(league: str, category: str) -> dict:
     db = await database.get_db()
     try:
         cur = await db.execute(
-            """SELECT s.* FROM snapshots s
+            f"""SELECT s.* FROM snapshots s
                JOIN (SELECT item_id, MAX(timestamp) AS ts FROM snapshots
-                     WHERE league = ? AND category = ?
+                     WHERE league = ? AND category = ? AND {_EMPIRICAL_FILTER}
                      GROUP BY item_id) m
                  ON s.item_id = m.item_id AND s.timestamp = m.ts
-               WHERE s.league = ? AND s.category = ?""",
+               WHERE s.league = ? AND s.category = ? AND {_EMPIRICAL_FILTER}""",
             (league, category, league, category),
         )
         return {r["item_id"]: dict(r) for r in await cur.fetchall()}
@@ -73,13 +77,13 @@ async def get_price_at(league: str, category: str, item_id: str, hours_ago: floa
         # Latest one at-or-before target, else earliest at-or-after.
         for sql, args in (
             (
-                """SELECT * FROM snapshots WHERE league = ? AND category = ? AND item_id = ?
-                   AND timestamp <= ? ORDER BY timestamp DESC LIMIT 1""",
+                f"""SELECT * FROM snapshots WHERE league = ? AND category = ? AND item_id = ?
+                   AND timestamp <= ? AND {_EMPIRICAL_FILTER} ORDER BY timestamp DESC LIMIT 1""",
                 (league, category, item_id, target),
             ),
             (
-                """SELECT * FROM snapshots WHERE league = ? AND category = ? AND item_id = ?
-                   AND timestamp >= ? ORDER BY timestamp ASC LIMIT 1""",
+                f"""SELECT * FROM snapshots WHERE league = ? AND category = ? AND item_id = ?
+                   AND timestamp >= ? AND {_EMPIRICAL_FILTER} ORDER BY timestamp ASC LIMIT 1""",
                 (league, category, item_id, target),
             ),
         ):
@@ -134,12 +138,12 @@ async def get_all_latest(league: str) -> dict:
     db = await database.get_db()
     try:
         cur = await db.execute(
-            """SELECT s.* FROM snapshots s
+            f"""SELECT s.* FROM snapshots s
                JOIN (SELECT league, category, item_id, MAX(timestamp) AS ts FROM snapshots
-                     WHERE league = ? GROUP BY category, item_id) m
+                     WHERE league = ? AND {_EMPIRICAL_FILTER} GROUP BY category, item_id) m
                  ON s.league = m.league AND s.category = m.category
                     AND s.item_id = m.item_id AND s.timestamp = m.ts
-               WHERE s.league = ?""",
+               WHERE s.league = ? AND {_EMPIRICAL_FILTER}""",
             (league, league),
         )
         grouped = {}

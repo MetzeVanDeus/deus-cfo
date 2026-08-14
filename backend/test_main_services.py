@@ -74,6 +74,8 @@ def test_capital_endpoint_passes_resolved_rate_to_builder(monkeypatch, tmp_path)
 
     result = run(main.create_capital_plan(request_for_plan()))
     assert captured["chaos_per_divine"] == 100
+    assert result["requested_mode"] == "PAPER"
+    assert result["mode_downgraded"] is False
     assert result["recommendation"] == "DEPLOY"
     assert result["chaos_per_divine"] == 100
     assert result["positions"]

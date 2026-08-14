@@ -1,10 +1,13 @@
 """Periodic snapshot collection from poe.ninja into SQLite."""
 
+import argparse
+import asyncio
 import logging
-from datetime import datetime, timedelta, timezone
+import os
 
 import httpx
 
+import cx_collector
 import database
 
 log = logging.getLogger("deuscfo.collector")
@@ -47,10 +50,9 @@ def stash_item_id(line: dict) -> str:
 
 
 def _normalize(line: dict, league: str, category: str, is_exchange: bool) -> dict:
-    """Map a poe.ninja line into a snapshot record."""
+    """Map a poe.ninja line into a DIRECT_OBSERVATION snapshot record."""
     if is_exchange:
         item_id = line.get("id", "")
-        spark = line.get("sparkline", {}) or {}
         return {
             "league": league,
             "category": category,
@@ -61,6 +63,9 @@ def _normalize(line: dict, league: str, category: str, is_exchange: bool) -> dic
             "volume": line.get("volumePrimaryValue", 0) or 0,
             "listing_count": 0,
             "icon": "",
+            "source": "poe.ninja",
+            "observation_type": "DIRECT_OBSERVATION",
+            "confidence_grade": "B",
         }
     return {
         "league": league,
@@ -72,42 +77,37 @@ def _normalize(line: dict, league: str, category: str, is_exchange: bool) -> dic
         "volume": line.get("listingCount", 0) or line.get("count", 0) or 0,
         "listing_count": line.get("listingCount", 0) or 0,
         "icon": line.get("icon", "") or "",
+        "source": "poe.ninja",
+        "observation_type": "DIRECT_OBSERVATION",
+        "confidence_grade": "B",
     }
-def _sparkline_history(line: dict, record: dict, collected_at: str) -> list[tuple[str, dict]]:
-    """Reconstruct poe.ninja's seven-day relative sparkline as daily prices."""
-    points = (line.get("sparkline") or {}).get("data") or []
-    current = float(record["price_chaos"])
-    if len(points) < 2 or current <= 0 or points[-1] is None or points[-1] <= -100:
+
+
+
+async def _collect_normalized(league: str, category: str) -> list[dict]:
+    """Fetch and normalize a category WITHOUT persisting. For current-price providers."""
+    exchange_types = _EXCHANGE_TYPES
+    stash_types = _STASH_TYPES
+    is_exchange = category in exchange_types
+    if not is_exchange and category not in stash_types:
         return []
-    baseline = current / (1 + float(points[-1]) / 100)
-    collected = datetime.fromisoformat(collected_at.replace("Z", "+00:00"))
-    if collected.tzinfo is None:
-        collected = collected.replace(tzinfo=timezone.utc)
-    today = collected.astimezone(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-    history = []
-    for index, change in enumerate(points[:-1]):
-        if change is None:
-            continue
-        price = baseline * (1 + float(change) / 100)
-        if price <= 0:
-            continue
-        day = today - timedelta(days=len(points) - 1 - index)
-        historical = dict(
-            record,
-            price_chaos=price,
-            volume=0,
-            listing_count=0,
-            source="poe.ninja_sparkline_reconstructed",
-        )
-        history.append((day.isoformat(timespec="seconds"), historical))
-    return history
-
-
+    url = EXCHANGE_URL if is_exchange else STASH_URL
+    api_type = exchange_types[category] if is_exchange else stash_types[category]
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        resp = await client.get(url, params={"league": league, "type": api_type})
+        if resp.status_code != 200:
+            return []
+        data = resp.json()
+    records = [
+        _normalize(line, league, category, is_exchange)
+        for line in data.get("lines", [])
+    ]
+    return [r for r in records if r["price_chaos"] > 0]
 
 
 async def collect_snapshot(league: str, category: str, exchange_types=None,
                            stash_types=None, timestamp: str | None = None) -> int:
-    """Fetch one persisted category for a league and store it."""
+    """Fetch one persisted category for a league and store it as direct observations."""
     if category not in PERSISTED_CATEGORIES:
         raise ValueError(f"Historical snapshots are disabled for high-cardinality category '{category}'")
     exchange_types = exchange_types or _EXCHANGE_TYPES
@@ -122,23 +122,19 @@ async def collect_snapshot(league: str, category: str, exchange_types=None,
             return 0
         data = resp.json()
     timestamp = timestamp or database.now_iso()
-    normalized = [(_normalize(line, league, category, is_exchange), line) for line in data.get("lines", [])]
-    normalized = [(record, line) for record, line in normalized if record["price_chaos"] > 0]
-    stored = await database.insert_snapshots([record for record, _ in normalized], timestamp)
-    if is_exchange:
-        by_timestamp: dict[str, list[dict]] = {}
-        for record, line in normalized:
-            for history_timestamp, historical in _sparkline_history(line, record, timestamp):
-                by_timestamp.setdefault(history_timestamp, []).append(historical)
-        for history_timestamp, records in by_timestamp.items():
-            stored += await database.insert_snapshots(records, history_timestamp)
+    records = [
+        _normalize(line, league, category, is_exchange)
+        for line in data.get("lines", [])
+    ]
+    records = [r for r in records if r["price_chaos"] > 0]
+    stored = await database.insert_snapshots(records, timestamp)
     log.info("Stored %d snapshots for %s / %s", stored, league, category)
     return stored
 
 
 async def collect_all_categories(league: str) -> dict[str, int]:
     """Prune retained history, then collect bounded exchange categories."""
-    await database.prune_market_data(PERSISTED_CATEGORIES)
+    await database.prune_market_data(PERSISTED_CATEGORIES, league=league)
     if not database.collection_allowed():
         log.error("Collection paused: project storage reached the safety threshold")
         return {category: 0 for category in _EXCHANGE_TYPES}
@@ -152,5 +148,41 @@ async def collect_all_categories(league: str) -> dict[str, int]:
         except Exception:
             log.exception("Failed to collect %s / %s", league, category)
             results[category] = 0
-    await database.prune_market_data(PERSISTED_CATEGORIES)
+    await database.prune_market_data(PERSISTED_CATEGORIES, league=league)
     return results
+
+
+async def run_collector(league: str, interval: int = 1800, once: bool = False) -> None:
+    """Own the SQLite write path independently from the analytical API."""
+    if interval < 1:
+        raise ValueError("interval must be positive")
+    while True:
+        results = await collect_all_categories(league)
+        cx_stored = await cx_collector.poll_latest_cx()
+        log.info("collection cycle complete for %s: %s; cx=%d", league, results, cx_stored)
+        if once:
+            return
+        await asyncio.sleep(interval)
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run the DeusCFO historical collector.")
+    parser.add_argument(
+        "--league",
+        default=os.environ.get("DEUSCFO_LEAGUE", "Allflame"),
+        help="poe.ninja league for market snapshots (default: DEUSCFO_LEAGUE or Allflame)",
+    )
+    parser.add_argument(
+        "--interval",
+        type=int,
+        default=int(os.environ.get("DEUSCFO_COLLECTOR_INTERVAL", "1800")),
+        help="seconds between collection cycles",
+    )
+    parser.add_argument("--once", action="store_true", help="collect one cycle and exit")
+    return parser.parse_args()
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    args = _parse_args()
+    asyncio.run(run_collector(args.league, args.interval, args.once))

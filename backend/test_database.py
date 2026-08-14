@@ -67,14 +67,22 @@ def test_prune_market_data_removes_unsupported_and_expired_rows(tmp_path, monkey
     cx_record = {
         "league": "Allflame", "market_id": 1, "item_a": "a", "item_b": "b",
     }
+    other_snapshot = snapshot("Currency", "other-old")
+    other_snapshot["league"] = "OtherLeague"
 
     async def run():
         await database.insert_snapshots([snapshot("Currency", "old")], "2000-01-01T00:00:00+00:00")
+        await database.insert_snapshots([other_snapshot], "2000-01-01T00:00:00+00:00")
         await database.insert_snapshots([snapshot("Currency", "keep")])
         await database.insert_snapshots([snapshot("SkillGem", "drop")])
         await database.insert_cx_hour([cx_record], "2000-01-01T00:00:00+00:00")
+        await database.insert_cx_hour([{**cx_record, "market_id": 2}], database.now_iso())
+        await database.insert_cx_hour(
+            [{**cx_record, "league": "OtherLeague", "market_id": 3}],
+            "2000-01-01T00:00:00+00:00",
+        )
 
-        deleted = await database.prune_market_data({"Currency"}, 1, 1)
+        deleted = await database.prune_market_data({"Currency"}, 1, 1, league="Allflame")
         assert deleted == {
             "unsupported_snapshots": 1,
             "expired_snapshots": 1,
@@ -86,7 +94,14 @@ def test_prune_market_data_removes_unsupported_and_expired_rows(tmp_path, monkey
             rows = await (await db.execute(
                 "SELECT category, item_id FROM snapshots"
             )).fetchall()
-            assert [tuple(row) for row in rows] == [("Currency", "keep")]
+            assert [tuple(row) for row in rows] == [
+                ("Currency", "keep"),
+                ("Currency", "other-old"),
+            ]
+            cx_rows = await (await db.execute(
+                "SELECT COUNT(*) FROM cx_history"
+            )).fetchone()
+            assert cx_rows[0] == 2
             max_pages = int((await (await db.execute("PRAGMA max_page_count")).fetchone())[0])
             page_size = int((await (await db.execute("PRAGMA page_size")).fetchone())[0])
             assert max_pages * page_size <= database.MAX_DATABASE_BYTES

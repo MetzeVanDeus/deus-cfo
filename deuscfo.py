@@ -28,6 +28,11 @@ def _services():
             "command": [sys.executable, "-m", "uvicorn", "main:app", "--host", "127.0.0.1", "--port", "8000", "--no-access-log"],
             "url": f"{BACKEND_URL}/api/snapshot/status",
         },
+        "collector": {
+            "cwd": ROOT / "backend",
+            "command": [sys.executable, "-m", "collector"],
+            "url": None,
+        },
         "frontend": {
             "cwd": ROOT / "frontend",
             "command": [npm, "run", "dev", "--", "--host", "127.0.0.1", "--port", "3000"],
@@ -66,7 +71,27 @@ def _project_footprint():
     return total, sqlite
 
 
-def _ready(url, timeout=1):
+def _ready(url, pid=None, timeout=1):
+    if url is None:
+        if pid is None:
+            return False
+        try:
+            pid = int(pid)
+        except (TypeError, ValueError):
+            return False
+        if os.name == "nt":
+            result = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}"],
+                capture_output=True,
+                text=True,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+            return any(f" {pid} " in line for line in result.stdout.splitlines())
+        try:
+            os.kill(pid, 0)
+            return True
+        except (OSError, SystemError):
+            return False
     try:
         with urllib.request.urlopen(url, timeout=timeout) as response:
             return 200 <= response.status < 500
@@ -78,7 +103,7 @@ def status():
     pids = _load_pids()
     states = {}
     for name, service in _services().items():
-        ready = _ready(service["url"])
+        ready = _ready(service["url"], pids.get(name))
         owner = f"PID {pids[name]}" if name in pids else "external/unowned"
         states[name] = ready
         print(f"{name:8} {'RUNNING' if ready else 'STOPPED':7}  {owner if ready else ''}")
@@ -102,7 +127,7 @@ def start():
         kwargs["start_new_session"] = True
     with open(os.devnull, "wb") as null:
         for name, service in _services().items():
-            if _ready(service["url"]):
+            if _ready(service["url"], pids.get(name)):
                 print(f"{name}: already running")
                 continue
             process = subprocess.Popen(
@@ -114,7 +139,7 @@ def start():
     _save_pids(pids)
     deadline = time.time() + 45
     while time.time() < deadline:
-        if all(_ready(service["url"]) for service in _services().values()):
+        if all(_ready(service["url"], pids.get(name)) for name, service in _services().items()):
             print(f"Ready: {FRONTEND_URL}")
             return True
         time.sleep(1)
