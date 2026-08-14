@@ -21,6 +21,7 @@ import cx_collector
 import cx_metadata
 import cx_queries
 import market_relationships
+import coverage
 
 log = logging.getLogger("deuscfo.main")
 
@@ -309,7 +310,7 @@ async def trigger_snapshot(request: SnapshotRequest):
         )
     if request.category:
         stored = await collector.collect_snapshot(request.league, request.category)
-        await database.prune_market_data(collector.PERSISTED_CATEGORIES)
+        await database.prune_market_data(collector.PERSISTED_CATEGORIES, league=request.league)
     else:
         stored = sum((await collector.collect_all_categories(request.league)).values())
     return {"league": request.league, "items_stored": stored}
@@ -526,6 +527,8 @@ async def create_capital_plan(request: CapitalPlanRequest):
         })
         result = plan.model_dump()
         result["recommendation_id"] = recommendation_id
+        result["requested_mode"] = request.mode
+        result["mode_downgraded"] = plan.mode != request.mode
         result["evidence_summary"] = {
             "reconstructed_opportunities": sum(
                 int(item.historical_context.get("reconstructed_sample_size") or 0) > 0
@@ -1056,48 +1059,27 @@ async def cx_history(league: str, item_id: str, hours: int = 24, ref: str = "aut
     return result
 
 
-async def _scheduler_loop():
-    """Collect snapshots every 30 min; poll latest CX hourly."""
-    await asyncio.sleep(5)  # let the app fully start before first run
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(f"{POE_NINJA_BASE}/poe1/api/economy/leagues")
-            if resp.status_code != 200:
-                log.error("scheduler: could not fetch leagues (HTTP %s)", resp.status_code)
-                return
-            leagues = resp.json()
-        if not leagues:
-            log.error("scheduler: no leagues returned")
-            return
-        league = leagues[0]["id"]
-        log.info("scheduler: collecting for league %s", league)
-        await collector.collect_all_categories(league)
-        log.info("scheduler: initial collection done for %s", league)
-    except Exception:
-        log.exception("scheduler: initial collection failed")
-
-    next_cx_poll = 0.0
-    while True:
-        await asyncio.sleep(30 * 60)
-        try:
-            log.info("scheduler: collecting for league %s", league)
-            await collector.collect_all_categories(league)
-            log.info("scheduler: collection done for %s", league)
-        except Exception:
-            log.exception("scheduler: collection failed")
-
-        # Poll currency exchange at most hourly (30-min loop checks the clock)
-        now = asyncio.get_event_loop().time()
-        if now >= next_cx_poll:
-            next_cx_poll = now + 3600
-            try:
-                log.info("scheduler: polling latest currency exchange hour")
-                await cx_collector.poll_latest_cx()
-            except Exception:
-                log.exception("scheduler: cx poll failed")
+@app.get("/api/coverage")
+async def data_coverage(league: str):
+    """Data coverage for all sources/categories for a league."""
+    return await coverage.all_coverage(league)
 
 
-@app.on_event("startup")
-async def _start_scheduler():
-    asyncio.create_task(_scheduler_loop())
-    log.info("scheduler: background snapshot loop started")
+@app.get("/api/coverage/trust")
+async def coverage_trust(
+    league: str,
+    category: str,
+    hours: float = 24,
+    min_coverage: float = 0.6,
+    source: str = "snapshot",
+):
+    """Trust gate: can we backtest this window?"""
+    return await coverage.can_trust_window(league, category, hours, min_coverage, source)
+
+
+@app.get("/api/coverage/{category}")
+async def data_coverage_category(league: str, category: str):
+    """Data coverage for a single snapshot category (use 'Currency%20Exchange' for CX)."""
+    if category == "Currency Exchange":
+        return await coverage.cx_coverage(league)
+    return await coverage.snapshot_coverage(league, category)

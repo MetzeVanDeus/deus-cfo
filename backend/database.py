@@ -12,7 +12,7 @@ _schema_path: str | None = None
 MAX_DATABASE_BYTES = 600 * 1024 * 1024
 MAX_WAL_BYTES = 32 * 1024 * 1024
 SNAPSHOT_RETENTION_DAYS = 14
-CX_RETENTION_DAYS = 14
+CX_RETENTION_DAYS = SNAPSHOT_RETENTION_DAYS
 PROJECT_ROOT = os.path.dirname(os.path.dirname(DB_PATH))
 PROJECT_LIMIT_BYTES = 1024 * 1024 * 1024
 COLLECTION_STOP_BYTES = 850 * 1024 * 1024
@@ -30,7 +30,11 @@ CREATE TABLE IF NOT EXISTS snapshots (
     volume REAL NOT NULL DEFAULT 0,
     listing_count REAL NOT NULL DEFAULT 0,
     icon TEXT NOT NULL DEFAULT '',
-    source TEXT NOT NULL DEFAULT 'observed'
+    source TEXT NOT NULL DEFAULT 'poe.ninja',
+    observation_type TEXT NOT NULL DEFAULT 'DIRECT_OBSERVATION',
+    observed_at TEXT NOT NULL DEFAULT '',
+    market_timestamp TEXT NOT NULL DEFAULT '',
+    confidence_grade TEXT NOT NULL DEFAULT 'B'
 );
 CREATE INDEX IF NOT EXISTS idx_snapshots_lookup
     ON snapshots (league, category, item_id, timestamp);
@@ -55,16 +59,26 @@ CREATE TABLE IF NOT EXISTS cx_history (
     lowest_ratio_a REAL,
     lowest_ratio_b REAL,
     highest_ratio_a REAL,
-    highest_ratio_b REAL
+    highest_ratio_b REAL,
+    realm TEXT NOT NULL DEFAULT 'poe1',
+    source TEXT NOT NULL DEFAULT 'ggg_currency_exchange',
+    observation_type TEXT NOT NULL DEFAULT 'OFFICIAL_HISTORICAL',
+    observed_at TEXT NOT NULL DEFAULT '',
+    market_timestamp TEXT NOT NULL DEFAULT '',
+    confidence_grade TEXT NOT NULL DEFAULT 'A'
 );
 CREATE INDEX IF NOT EXISTS idx_cx_lookup
     ON cx_history (league, item_a, item_b, timestamp);
 CREATE INDEX IF NOT EXISTS idx_cx_ts
     ON cx_history (timestamp);
+-- idx_cx_observation is created in get_db() after dedupe migration
 
 CREATE TABLE IF NOT EXISTS cx_progress (
     key TEXT PRIMARY KEY,
-    last_change_id INTEGER NOT NULL,
+    first_change_id INTEGER,
+    last_change_id INTEGER,
+    first_available_hour TEXT,
+    last_synced_hour TEXT,
     updated_at TEXT NOT NULL
 );
 
@@ -346,7 +360,24 @@ async def get_db() -> aiosqlite.Connection:
                     await db.execute("PRAGMA journal_mode=WAL")
                     await db.executescript(_SCHEMA)
                     await _ensure_columns(db, "snapshots", {
-                        "source": "TEXT NOT NULL DEFAULT 'observed'",
+                        "source": "TEXT NOT NULL DEFAULT 'poe.ninja'",
+                        "observation_type": "TEXT NOT NULL DEFAULT 'DIRECT_OBSERVATION'",
+                        "observed_at": "TEXT NOT NULL DEFAULT ''",
+                        "market_timestamp": "TEXT NOT NULL DEFAULT ''",
+                        "confidence_grade": "TEXT NOT NULL DEFAULT 'B'",
+                    })
+                    await _ensure_columns(db, "cx_history", {
+                        "realm": "TEXT NOT NULL DEFAULT 'poe1'",
+                        "source": "TEXT NOT NULL DEFAULT 'ggg_currency_exchange'",
+                        "observation_type": "TEXT NOT NULL DEFAULT 'OFFICIAL_HISTORICAL'",
+                        "observed_at": "TEXT NOT NULL DEFAULT ''",
+                        "market_timestamp": "TEXT NOT NULL DEFAULT ''",
+                        "confidence_grade": "TEXT NOT NULL DEFAULT 'A'",
+                    })
+                    await _ensure_columns(db, "cx_progress", {
+                        "first_change_id": "INTEGER",
+                        "first_available_hour": "TEXT",
+                        "last_synced_hour": "TEXT",
                     })
                     await _ensure_columns(db, "portfolio_recommendations", {
                         "league": "TEXT", "mode": "TEXT", "recommendation": "TEXT", "reason": "TEXT",
@@ -356,9 +387,22 @@ async def get_db() -> aiosqlite.Connection:
                         "quantity": "REAL", "chaos_per_divine": "REAL", "capital_currency": "TEXT",
                         "actual_entry_at": "TEXT",
                     })
+                    await db.execute(
+                        """UPDATE snapshots
+                           SET observation_type = 'SYNTHETIC'
+                           WHERE lower(source) LIKE '%synthetic%'
+                              OR lower(source) LIKE '%reconstructed%'"""
+                    )
+                    await db.execute(
+                        """UPDATE cx_history
+                           SET observation_type = 'SYNTHETIC'
+                           WHERE lower(source) LIKE '%synthetic%'
+                              OR lower(source) LIKE '%reconstructed%'"""
+                    )
                     await _ensure_columns(db, "paper_equity", {
                         "trade_id": "INTEGER REFERENCES trade_records(id)",
                     })
+                    await _dedupe_cx_history(db)
                     await db.execute(
                         """UPDATE paper_equity
                            SET trade_id = (
@@ -413,19 +457,38 @@ def project_footprint() -> int:
 def collection_allowed() -> bool:
     return project_footprint() < COLLECTION_STOP_BYTES
 
+
+async def _dedupe_cx_history(db: aiosqlite.Connection) -> None:
+    """Remove legacy duplicate CX rows before creating the unique index."""
+    await db.execute(
+        """DELETE FROM cx_history WHERE id NOT IN (
+               SELECT MIN(id) FROM cx_history
+               GROUP BY realm, league, timestamp, market_id
+           )"""
+    )
+    await db.execute(
+        """CREATE UNIQUE INDEX IF NOT EXISTS idx_cx_observation
+           ON cx_history (realm, league, timestamp, market_id)"""
+    )
+    await db.commit()
+
+
 async def insert_snapshots(records: list[dict], timestamp: str | None = None) -> int:
     """Insert previously unseen snapshot records. Returns inserted row count."""
     if not records or not collection_allowed():
         return 0
     ts = timestamp or now_iso()
+    observed = now_iso()
     db = await get_db()
     try:
         before = db.total_changes
         await db.executemany(
             """INSERT INTO snapshots
                (timestamp, league, category, item_id, item_name, variant,
-                price_chaos, volume, listing_count, icon, source)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                price_chaos, volume, listing_count, icon,
+                source, observation_type, observed_at, market_timestamp,
+                confidence_grade)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(timestamp, league, category, item_id, variant)
                DO UPDATE SET source = excluded.source
                WHERE snapshots.source <> excluded.source""",
@@ -434,7 +497,11 @@ async def insert_snapshots(records: list[dict], timestamp: str | None = None) ->
                     ts, r["league"], r["category"], r["item_id"], r["item_name"],
                     r.get("variant", ""), r["price_chaos"], r.get("volume", 0),
                     r.get("listing_count", 0), r.get("icon", ""),
-                    r.get("source", "observed"),
+                    r.get("source", "poe.ninja"),
+                    r.get("observation_type", "DIRECT_OBSERVATION"),
+                    r.get("observed_at", observed),
+                    r.get("market_timestamp", ts),
+                    r.get("confidence_grade", "B"),
                 )
                 for r in records
             ],
@@ -463,20 +530,28 @@ async def db_file_size() -> int:
 
 
 async def insert_cx_hour(records: list[dict], timestamp: str) -> int:
-    """Insert one hour of currency-exchange markets. Returns row count."""
+    """Insert one hour of currency-exchange markets. Returns inserted row count.
+
+    Idempotent on (realm, league, timestamp, market_id) via ON CONFLICT.
+    """
     if not records:
         return 0
     if not collection_allowed():
         return 0
+    observed = now_iso()
     db = await get_db()
     try:
+        before = db.total_changes
         await db.executemany(
             """INSERT INTO cx_history
                (timestamp, league, market_id, item_a, item_b,
                 volume_a, volume_b, lowest_stock_a, lowest_stock_b,
                 highest_stock_a, highest_stock_b, lowest_ratio_a,
-                lowest_ratio_b, highest_ratio_a, highest_ratio_b)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                lowest_ratio_b, highest_ratio_a, highest_ratio_b,
+                realm, source, observation_type, observed_at,
+                market_timestamp, confidence_grade)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(realm, league, timestamp, market_id) DO NOTHING""",
             [
                 (
                     timestamp, r["league"], r["market_id"], r["item_a"], r["item_b"],
@@ -485,13 +560,18 @@ async def insert_cx_hour(records: list[dict], timestamp: str) -> int:
                     r.get("highest_stock_a"), r.get("highest_stock_b"),
                     r.get("lowest_ratio_a"), r.get("lowest_ratio_b"),
                     r.get("highest_ratio_a"), r.get("highest_ratio_b"),
+                    r.get("realm", "poe1"),
+                    r.get("source", "ggg_currency_exchange"),
+                    r.get("observation_type", "OFFICIAL_HISTORICAL"),
+                    r.get("observed_at", observed),
+                    r.get("market_timestamp", timestamp),
+                    r.get("confidence_grade", "A"),
                 )
                 for r in records
             ],
         )
         await db.commit()
-        await db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        return len(records)
+        return db.total_changes - before
     finally:
         await db.close()
 
@@ -506,15 +586,51 @@ async def get_cx_progress(key: str = "default") -> int | None:
         await db.close()
 
 
-async def set_cx_progress(key: str, change_id: int) -> None:
+async def get_cx_cursor(key: str = "default") -> dict:
+    """Return full cursor metadata for a sync key."""
     db = await get_db()
     try:
-        await db.execute(
-            """INSERT INTO cx_progress (key, last_change_id, updated_at) VALUES (?, ?, ?)
-               ON CONFLICT(key) DO UPDATE SET last_change_id = excluded.last_change_id,
-                                              updated_at = excluded.updated_at""",
-            (key, change_id, now_iso()),
-        )
+        cur = await db.execute("SELECT * FROM cx_progress WHERE key = ?", (key,))
+        row = await cur.fetchone()
+        return dict(row) if row else {}
+    finally:
+        await db.close()
+
+
+async def set_cx_progress(
+    key: str,
+    change_id: int,
+    first_change_id: int | None = None,
+    first_available_hour: str | None = None,
+    last_synced_hour: str | None = None,
+) -> None:
+    """Update sync cursor. Preserves first_change_id/first_available_hour if not given."""
+    db = await get_db()
+    try:
+        existing = await (await db.execute(
+            "SELECT first_change_id, first_available_hour FROM cx_progress WHERE key = ?",
+            (key,),
+        )).fetchone()
+        if existing:
+            fci = first_change_id if first_change_id is not None else existing["first_change_id"]
+            fah = first_available_hour if first_available_hour is not None else existing["first_available_hour"]
+            await db.execute(
+                """UPDATE cx_progress SET
+                       last_change_id = ?, first_change_id = ?,
+                       first_available_hour = ?, last_synced_hour = ?,
+                       updated_at = ?
+                   WHERE key = ?""",
+                (change_id, fci, fah, last_synced_hour, now_iso(), key),
+            )
+        else:
+            await db.execute(
+                """INSERT INTO cx_progress
+                   (key, first_change_id, last_change_id,
+                    first_available_hour, last_synced_hour, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (key, first_change_id, change_id,
+                 first_available_hour, last_synced_hour, now_iso()),
+            )
         await db.commit()
     finally:
         await db.close()
@@ -524,8 +640,9 @@ async def prune_market_data(
     keep_categories,
     snapshot_days: int = SNAPSHOT_RETENTION_DAYS,
     cx_days: int = CX_RETENTION_DAYS,
+    league: str | None = None,
 ) -> dict[str, int]:
-    """Bound raw market history; journals and paper portfolios are never pruned."""
+    """Retain raw market and CX observations for one league window."""
     categories = tuple(keep_categories)
     if not categories or snapshot_days < 1 or cx_days < 1:
         raise ValueError("retention requires categories and positive day counts")
@@ -542,12 +659,22 @@ async def prune_market_data(
             f"DELETE FROM snapshots WHERE category NOT IN ({placeholders})",
             categories,
         )
-        age_cursor = await db.execute(
-            "DELETE FROM snapshots WHERE timestamp < ?", (snapshot_cutoff,)
-        )
-        cx_cursor = await db.execute(
-            "DELETE FROM cx_history WHERE timestamp < ?", (cx_cutoff,)
-        )
+        if league is None:
+            age_cursor = await db.execute(
+                "DELETE FROM snapshots WHERE timestamp < ?", (snapshot_cutoff,)
+            )
+            cx_cursor = await db.execute(
+                "DELETE FROM cx_history WHERE timestamp < ?", (cx_cutoff,)
+            )
+        else:
+            age_cursor = await db.execute(
+                "DELETE FROM snapshots WHERE league = ? AND timestamp < ?",
+                (league, snapshot_cutoff),
+            )
+            cx_cursor = await db.execute(
+                "DELETE FROM cx_history WHERE league = ? AND timestamp < ?",
+                (league, cx_cutoff),
+            )
         await db.commit()
         await db.execute("PRAGMA incremental_vacuum(2000)")
         await db.execute("PRAGMA wal_checkpoint(TRUNCATE)")

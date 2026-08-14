@@ -56,7 +56,11 @@ async def fetch_currency_exchange(change_id: int | None = None) -> dict:
 
 
 def _parse_hour(data: dict, wanted_leagues: set[str]) -> tuple[str, list[dict]]:
-    """Turn a raw API response into (iso_timestamp, filtered market records)."""
+    """Turn a raw API response into (iso_timestamp, filtered market records).
+
+    Records carry provenance: source, observation_type, confidence_grade,
+    market_timestamp (= the hour's unix timestamp as ISO), realm.
+    """
     ncid = data.get("next_change_id")
     ts = datetime.datetime.fromtimestamp(ncid, datetime.timezone.utc).isoformat(timespec="seconds") if ncid else ""
     records = []
@@ -81,6 +85,11 @@ def _parse_hour(data: dict, wanted_leagues: set[str]) -> tuple[str, list[dict]]:
             "highest_stock_a": hi.get(a), "highest_stock_b": hi.get(b),
             "lowest_ratio_a": lr.get(a), "lowest_ratio_b": lr.get(b),
             "highest_ratio_a": hr.get(a), "highest_ratio_b": hr.get(b),
+            "realm": "poe1",
+            "source": "ggg_currency_exchange",
+            "observation_type": "OFFICIAL_HISTORICAL",
+            "market_timestamp": ts,
+            "confidence_grade": "A",
         })
     return ts, records
 
@@ -99,6 +108,8 @@ async def backfill_currency_exchange(max_hours: int = 168) -> int:
     wanted = await _fetch_leagues()
     last = await database.get_cx_progress("default")
     change_id = last
+    first_change_id = None
+    first_hour = None
     hours = 0
     while hours < max_hours:
         try:
@@ -115,13 +126,18 @@ async def backfill_currency_exchange(max_hours: int = 168) -> int:
             break
         ts, records = _parse_hour(data, wanted)
         stored = await database.insert_cx_hour(records, ts) if records else 0
-        if stored != len(records):
-            log.error(
-                "cx backfill: storage paused at %s; retained progress %s for retry",
-                ts, change_id,
-            )
-            break
-        await database.set_cx_progress("default", ncid)
+        # stored <= len(records) because insert is idempotent (ON CONFLICT DO NOTHING);
+        # Fresh start (no saved progress): record the first available hour.
+        # On resume, first_* is preserved (set_cx_progress keeps existing).
+        if last is None and first_change_id is None:
+            first_change_id = ncid
+            first_hour = ts
+        await database.set_cx_progress(
+            "default", ncid,
+            first_change_id=first_change_id,
+            first_available_hour=first_hour,
+            last_synced_hour=ts,
+        )
         log.info("cx backfill: stored %d entries for hour %s (next=%s)", stored, ts, ncid)
         change_id = ncid
         hours += 1
@@ -148,9 +164,9 @@ async def poll_latest_cx() -> int:
         return 0
     ts, records = _parse_hour(data, wanted)
     stored = await database.insert_cx_hour(records, ts) if records else 0
-    if stored != len(records):
-        log.error("cx poll: storage paused at %s; progress retained for retry", ts)
-        return 0
-    await database.set_cx_progress("default", ncid)
+    await database.set_cx_progress(
+        "default", ncid,
+        last_synced_hour=ts,
+    )
     log.info("cx poll: stored %d entries for hour %s", stored, ts)
     return stored
