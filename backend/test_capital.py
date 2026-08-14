@@ -1,5 +1,11 @@
 from datetime import datetime, timedelta, timezone
-from capital import Bankroll, InvestmentPreferences, build_capital_plan, simulate_portfolio
+from capital import (
+    AllocationPosition,
+    Bankroll,
+    InvestmentPreferences,
+    build_capital_plan,
+    simulate_portfolio,
+)
 
 from opportunity import InvestableOpportunity, Opportunity, normalize_opportunity
 from portfolio import calibrate_probability
@@ -87,6 +93,34 @@ def test_bootstrap_is_deterministic_and_expiration_waits():
     first = simulate_portfolio(positions, [live], seed=123, trials=100)
     second = simulate_portfolio(positions, [live], seed=123, trials=100)
     assert first == second
+
+
+def test_bootstrap_does_not_bias_shorter_histories_in_correlated_groups():
+    short = make_opp("short", group="shared")
+    short.historical_returns = [0, 100]
+    long = make_opp("long", group="shared")
+    long.historical_returns = [0, 0, 0]
+    positions = [
+        AllocationPosition(
+            opportunity_id=item.id,
+            category=item.category,
+            correlation_group=item.correlation_group,
+            capital=100,
+            expected_profit=0,
+            expected_return=0,
+            probability_profitable=.5,
+            expected_duration=1,
+            duration_interval=[1, 1],
+            downside_estimate=0,
+            tier="A",
+            reason="test",
+        )
+        for item in (short, long)
+    ]
+
+    simulation = simulate_portfolio(positions, [short, long], seed=7, trials=20_000)
+
+    assert 49 <= simulation.expected_profit <= 51
 
 
 def test_empty_or_observe_mode_never_fabricates_positions():
