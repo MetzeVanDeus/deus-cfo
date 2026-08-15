@@ -62,7 +62,7 @@ def test_required_unique_reward_category_is_persisted(monkeypatch):
         status_code = 200
         def json(self):
             return {"lines": [{
-                "detailsId": "headhunter", "name": "Headhunter",
+                "detailsId": "headhunter-leather-belt", "name": "Headhunter",
                 "chaosValue": 410, "listingCount": 17,
             }]}
 
@@ -83,7 +83,7 @@ def test_required_unique_reward_category_is_persisted(monkeypatch):
     monkeypatch.setattr(collector.database, "insert_snapshots", insert)
     assert asyncio.run(collector.collect_snapshot("Allflame", "UniqueAccessory")) == 1
     assert inserted[0]["category"] == "UniqueAccessory"
-    assert inserted[0]["item_id"] == "headhunter"
+    assert inserted[0]["item_id"] == "headhunter-leather-belt"
 def test_no_sparkline_backfill_in_persisted_snapshots(monkeypatch):
     """Synthetic sparkline reconstruction must never enter snapshots."""
     insert_calls: list[tuple[list, str | None]] = []

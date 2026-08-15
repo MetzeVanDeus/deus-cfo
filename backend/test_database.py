@@ -130,7 +130,7 @@ def test_execution_quote_attachment_preserves_snapshot_provenance(tmp_path, monk
     monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "provenance.db"))
     database._schema_path = None
     aggregate = {
-        "league": "Allflame", "category": "UniqueAccessory", "item_id": "headhunter",
+        "league": "Allflame", "category": "UniqueAccessory", "item_id": "headhunter-leather-belt",
         "item_name": "Headhunter", "price_chaos": 410, "volume": 17,
         "listing_count": 3, "source": "poe.ninja", "observation_type": "DIRECT_OBSERVATION",
         "observed_at": "2026-08-15T00:00:00Z", "market_timestamp": "2026-08-15T00:00:00Z",

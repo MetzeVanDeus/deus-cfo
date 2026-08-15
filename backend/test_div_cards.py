@@ -174,10 +174,43 @@ def test_profit_routes_endpoint_exposes_card_routes(monkeypatch):
     assert result["routes"][0]["strategy_family"] == "divination_card"
     assert result["routes"][0]["capacity_units"] == "sets"
 
+def test_actual_recipe_snapshot_ids_produce_theoretical_route(monkeypatch):
+    async def latest(_league):
+        return {
+            "DivinationCard": [{
+                "league": "Test", "category": "DivinationCard",
+                "item_id": "the-doctor", "item_name": "The Doctor",
+                "variant": "", "price_chaos": 42, "volume": 12,
+                "listing_count": 12, "source": "poe.ninja",
+                "observation_type": "DIRECT_OBSERVATION",
+                "observed_at": "2026-08-15T00:00:00Z",
+                "confidence_grade": "B",
+            }],
+            "UniqueAccessory": [{
+                "league": "Test", "category": "UniqueAccessory",
+                "item_id": "headhunter-leather-belt", "item_name": "Headhunter",
+                "variant": "", "price_chaos": 410, "volume": 4,
+                "listing_count": 4, "source": "poe.ninja",
+                "observation_type": "DIRECT_OBSERVATION",
+                "observed_at": "2026-08-15T00:00:00Z",
+                "confidence_grade": "B",
+            }],
+        }
+
+    monkeypatch.setattr(main.market_data, "get_all_latest", latest)
+    result = asyncio.run(main.get_profit_routes("Test", category="DivinationCard"))
+    route = result["routes"][0]
+    assert route["transformation_id"] == "the-doctor-to-headhunter"
+    assert route["status"] == "theoretical"
+    assert route["theoretical_roi"] == pytest.approx((410 - 42 * 8) / (42 * 8))
+    assert route["realistic_output_value"] == pytest.approx(410)
+    assert route["expected_net_profit"] == 0
+    assert route["executable_roi"] is None
+
 def test_profit_routes_keeps_theoretical_route_when_reward_has_no_sell_depth(monkeypatch):
     card_recipe = recipe(
         reward_item="Headhunter",
-        reward_market_key="UniqueAccessory:headhunter",
+        reward_market_key="UniqueAccessory:headhunter-leather-belt",
     )
     rows = {
         "DivinationCard": [{
@@ -185,7 +218,7 @@ def test_profit_routes_keeps_theoretical_route_when_reward_has_no_sell_depth(mon
             "source": "poe.ninja", "confidence_grade": "B",
         }],
         "UniqueAccessory": [{
-            "item_id": "headhunter", "item_name": "Headhunter", "price_chaos": 3,
+            "item_id": "headhunter-leather-belt", "item_name": "Headhunter", "price_chaos": 3,
             "source": "poe.ninja", "confidence_grade": "B",
         }],
     }

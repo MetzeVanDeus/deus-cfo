@@ -10,7 +10,7 @@
       "reward_type": "exact_unique",
       "reward_item": "Headhunter",
       "reward_quantity": 1,
-      "reward_market_key": "UniqueAccessory:headhunter",
+      "reward_market_key": "UniqueAccessory:headhunter-leather-belt",
       "variant": "",
       "corrupted": false,
       "item_level": null,
