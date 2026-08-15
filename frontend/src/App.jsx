@@ -45,7 +45,7 @@ function App() {
       {activeTab === 'signals' && <SignalsTab selectedLeague={selectedLeague} />}
       {activeTab === 'explorer' && <ExplorerTab leagues={leagues} categories={categories} selectedLeague={selectedLeague} setSelectedLeague={setSelectedLeague} />}
       {activeTab === 'strategies' && <StrategiesTab leagues={leagues} categories={categories} selectedLeague={selectedLeague} setSelectedLeague={setSelectedLeague} />}
-      {activeTab === 'profit-routes' && <ProfitRoutesTab selectedLeague={selectedLeague} />}
+      {activeTab === 'profit-routes' && <ProfitRoutesTab categories={categories} selectedLeague={selectedLeague} />}
     </main>
     <footer className="footer">DeusCFO <span>·</span> Market data from poe.ninja <span>·</span> Research terminal, not an execution venue</footer>
   </div>

@@ -54,6 +54,36 @@ def test_collector_uses_api_type_keys_and_blocks_stash_history(monkeypatch):
         "id": 123, "detailsId": "awakened-empower-support-4"
     }) == "awakened-empower-support-4"
 
+
+def test_required_unique_reward_category_is_persisted(monkeypatch):
+    inserted = []
+
+    class Response:
+        status_code = 200
+        def json(self):
+            return {"lines": [{
+                "detailsId": "headhunter", "name": "Headhunter",
+                "chaosValue": 410, "listingCount": 17,
+            }]}
+
+    class Client:
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *_):
+            return None
+        async def get(self, _url, params):
+            assert params["type"] == "UniqueAccessory"
+            return Response()
+
+    async def insert(records, timestamp=None):
+        inserted.extend(records)
+        return len(records)
+
+    monkeypatch.setattr(collector.httpx, "AsyncClient", lambda **_: Client())
+    monkeypatch.setattr(collector.database, "insert_snapshots", insert)
+    assert asyncio.run(collector.collect_snapshot("Allflame", "UniqueAccessory")) == 1
+    assert inserted[0]["category"] == "UniqueAccessory"
+    assert inserted[0]["item_id"] == "headhunter"
 def test_no_sparkline_backfill_in_persisted_snapshots(monkeypatch):
     """Synthetic sparkline reconstruction must never enter snapshots."""
     insert_calls: list[tuple[list, str | None]] = []
@@ -109,8 +139,8 @@ def test_category_sweep_uses_one_timestamp(monkeypatch):
     monkeypatch.setattr(collector.database, "prune_market_data", prune)
     results = asyncio.run(collector.collect_all_categories("Allflame"))
 
-    assert len(results) == 8
-    assert len(timestamps) == 8
+    assert len(results) == len(collector._COLLECTION_TYPES)
+    assert len(timestamps) == len(collector._COLLECTION_TYPES)
     assert len(set(timestamps)) == 1
 
 

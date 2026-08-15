@@ -4,8 +4,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 import httpx
 import math
 import asyncio
+import json
 import logging
-
 import database
 import collector
 import market_data
@@ -504,11 +504,16 @@ async def create_capital_plan(request: CapitalPlanRequest):
             provider = strategies.TransformationStrategyProvider(
                 strategies.default_transformation_registry()
             )
-            candidates.extend(provider.discover({
+            provider_context = {
                 "league": request.league,
                 "bankroll": request.bankroll.total_net_worth,
                 **market,
-            }))
+                "chaos_per_divine": chaos_per_divine,
+            }
+            candidates.extend(provider.discover(provider_context))
+            candidates.extend(strategies.DivinationCardStrategyProvider(
+                strategies.default_div_card_registry()
+            ).discover(provider_context))
         plan = capital.build_capital_plan(
             request.bankroll,
             request.preferences,
@@ -755,10 +760,19 @@ async def list_transformations():
         "lifecycle": [lifecycle.value for lifecycle in strategies.StrategyLifecycle],
     }
 
+@app.get("/api/strategies/divination-cards")
+async def list_divination_cards():
+    registry = strategies.default_div_card_registry()
+    return {
+        "version": registry.version,
+        "source": registry.source,
+        "recipes": list(registry.records()),
+    }
 
 def _latest_market_context(latest: dict) -> dict:
     prices: dict[str, dict] = {}
     price_records: dict[str, dict] = {}
+    execution_prices: dict[str, dict] = {}
     for market_category, rows in latest.items():
         for row in rows:
             item_id = str(row.get("item_id") or "")
@@ -769,6 +783,25 @@ def _latest_market_context(latest: dict) -> dict:
                 price_records[key] = row
                 prices.setdefault(item, row)
                 price_records.setdefault(item, row)
+            quote = row.get("execution_quote")
+            if isinstance(quote, str):
+                try:
+                    quote = json.loads(quote)
+                except (TypeError, ValueError):
+                    quote = None
+            if not isinstance(quote, dict) and (row.get("buy_levels") is not None or row.get("sell_levels") is not None):
+                quote = {
+                    "buy_levels": row.get("buy_levels"),
+                    "sell_levels": row.get("sell_levels"),
+                    "buy_fee_rate": row.get("buy_fee_rate", row.get("fee_rate", 0)),
+                    "sell_fee_rate": row.get("sell_fee_rate", row.get("fee_rate", 0)),
+                    "observed_at": row.get("observed_at"),
+                    "confidence": row.get("confidence"),
+                    "source": row.get("source"),
+                }
+            if isinstance(quote, dict):
+                for item in {item_id, item_name} - {""}:
+                    execution_prices[f"{market_category}:{item}"] = quote
     divine = prices.get("Currency:Divine")
     chaos = prices.get("Currency:Chaos")
     chaos_per_divine = 0.0
@@ -777,28 +810,39 @@ def _latest_market_context(latest: dict) -> dict:
         chaos_price = chaos.get("price_chaos")
         if divine_price and chaos_price and chaos_price > 0:
             chaos_per_divine = divine_price / chaos_price
-    return {"prices": prices, "price_records": price_records, "chaos_per_divine": chaos_per_divine}
+    return {
+        "prices": prices,
+        "price_records": price_records,
+        "execution_prices": execution_prices,
+        "chaos_per_divine": chaos_per_divine,
+    }
 
 
 @app.get("/api/profit-routes")
 async def get_profit_routes(league: str, category: str | None = None):
-    """Evaluate declarative transformations against the latest observed market."""
+    """Evaluate routes, including theoretical routes lacking executable evidence."""
     if category and category not in ALL_CATEGORIES and category != "Transformation":
         raise HTTPException(status_code=400, detail=f"unknown category: {category}")
     market = _latest_market_context(await market_data.get_all_latest(league))
-    provider = strategies.TransformationStrategyProvider(
+    context = {"league": league, "category": category, **market}
+    routes = list(strategies.TransformationStrategyProvider(
         strategies.default_transformation_registry()
-    )
-    routes = provider.evaluate({
-        "league": league,
-        "category": category,
-        **market,
-    })
-    routes = [route for route in routes if route.expected_net_profit > 0]
+    ).evaluate(context))
+    if category in (None, "DivinationCard"):
+        routes.extend(strategies.DivinationCardStrategyProvider(
+            strategies.default_div_card_registry()
+        ).evaluate(context))
     return {
         "league": league,
         "category": category,
-        "routes": [route.model_dump() for route in sorted(routes, key=lambda route: route.expected_net_profit, reverse=True)],
+        "routes": [route.model_dump() for route in sorted(
+            routes,
+            key=lambda route: (
+                route.status != "executable",
+                -(route.expected_net_profit if route.expected_net_profit > 0 else 0),
+                route.name,
+            ),
+        )],
     }
 
 

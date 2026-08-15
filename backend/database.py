@@ -1,6 +1,8 @@
 """SQLite snapshot storage for DeusCFO."""
 
 import asyncio
+import json
+import math
 import os
 from datetime import datetime, timedelta, timezone
 
@@ -34,7 +36,8 @@ CREATE TABLE IF NOT EXISTS snapshots (
     observation_type TEXT NOT NULL DEFAULT 'DIRECT_OBSERVATION',
     observed_at TEXT NOT NULL DEFAULT '',
     market_timestamp TEXT NOT NULL DEFAULT '',
-    confidence_grade TEXT NOT NULL DEFAULT 'B'
+    confidence_grade TEXT NOT NULL DEFAULT 'B',
+    execution_quote TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_snapshots_lookup
     ON snapshots (league, category, item_id, timestamp);
@@ -332,6 +335,70 @@ async def _migrate_paper_units(db: aiosqlite.Connection) -> None:
     await db.execute("PRAGMA user_version = 5")
     await db.commit()
 
+def validate_execution_quote(value) -> dict | None:
+    """Return a safe depth quote or None; aggregate rows remain quote-free."""
+    if not isinstance(value, dict):
+        return None
+    result = {}
+    for side in ("buy_levels", "sell_levels", "ask_levels"):
+        levels = value.get(side)
+        if levels is None:
+            continue
+        if not isinstance(levels, list) or not levels:
+            return None
+        normalized = []
+        for level in levels:
+            if not isinstance(level, dict):
+                return None
+            price, quantity = level.get("price"), level.get("quantity")
+            if (
+                not isinstance(price, (int, float))
+                or isinstance(price, bool)
+                or not math.isfinite(float(price))
+                or price <= 0
+                or not isinstance(quantity, (int, float))
+                or isinstance(quantity, bool)
+                or not math.isfinite(float(quantity))
+                or quantity <= 0
+            ):
+                return None
+            normalized.append({"price": float(price), "quantity": float(quantity)})
+        result[side] = normalized
+    if not result:
+        return None
+    observed_at = value.get("observed_at")
+    source = value.get("source")
+    confidence = value.get("confidence")
+    if not isinstance(observed_at, str) or not observed_at:
+        return None
+    if not isinstance(source, str) or not source:
+        return None
+    if (
+        not isinstance(confidence, (int, float))
+        or isinstance(confidence, bool)
+        or not math.isfinite(float(confidence))
+        or not 0 <= confidence <= 1
+    ):
+        return None
+    for field in ("fee_rate", "buy_fee_rate", "sell_fee_rate"):
+        if field in value and (
+            not isinstance(value[field], (int, float))
+            or isinstance(value[field], bool)
+            or not math.isfinite(float(value[field]))
+            or not 0 <= value[field] < 1
+        ):
+            return None
+    fee = float(value.get("fee_rate", 0))
+    result.update({
+        "buy_fee_rate": float(value.get("buy_fee_rate", fee)),
+        "sell_fee_rate": float(value.get("sell_fee_rate", fee)),
+        "observed_at": observed_at,
+        "confidence": float(confidence),
+        "source": source,
+    })
+    return result
+
+
 
 async def _ensure_columns(db: aiosqlite.Connection, table: str, columns: dict[str, str]) -> None:
     cursor = await db.execute(f"PRAGMA table_info({table})")
@@ -365,6 +432,7 @@ async def get_db() -> aiosqlite.Connection:
                         "observed_at": "TEXT NOT NULL DEFAULT ''",
                         "market_timestamp": "TEXT NOT NULL DEFAULT ''",
                         "confidence_grade": "TEXT NOT NULL DEFAULT 'B'",
+                        "execution_quote": "TEXT",
                     })
                     await _ensure_columns(db, "cx_history", {
                         "realm": "TEXT NOT NULL DEFAULT 'poe1'",
@@ -487,11 +555,14 @@ async def insert_snapshots(records: list[dict], timestamp: str | None = None) ->
                (timestamp, league, category, item_id, item_name, variant,
                 price_chaos, volume, listing_count, icon,
                 source, observation_type, observed_at, market_timestamp,
-                confidence_grade)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                confidence_grade, execution_quote)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(timestamp, league, category, item_id, variant)
-               DO UPDATE SET source = excluded.source
-               WHERE snapshots.source <> excluded.source""",
+               DO UPDATE SET execution_quote = COALESCE(
+                   snapshots.execution_quote, excluded.execution_quote
+               )
+               WHERE snapshots.execution_quote IS NULL
+                 AND excluded.execution_quote IS NOT NULL""",
             [
                 (
                     ts, r["league"], r["category"], r["item_id"], r["item_name"],
@@ -502,6 +573,11 @@ async def insert_snapshots(records: list[dict], timestamp: str | None = None) ->
                     r.get("observed_at", observed),
                     r.get("market_timestamp", ts),
                     r.get("confidence_grade", "B"),
+                    (
+                        json.dumps(quote, sort_keys=True)
+                        if (quote := validate_execution_quote(r.get("execution_quote"))) is not None
+                        else None
+                    ),
                 )
                 for r in records
             ],

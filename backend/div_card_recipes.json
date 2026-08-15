@@ -1,0 +1,28 @@
+{
+  "version": "3.0.0",
+  "source": "manual-curated",
+  "recipes": [
+    {
+      "id": "the-doctor-to-headhunter",
+      "card": "The Doctor",
+      "set_size": 8,
+      "card_market_key": "DivinationCard:the-doctor",
+      "reward_type": "exact_unique",
+      "reward_item": "Headhunter",
+      "reward_quantity": 1,
+      "reward_market_key": "UniqueAccessory:headhunter",
+      "variant": "",
+      "corrupted": false,
+      "item_level": null,
+      "special_conditions": [],
+      "deterministic": true,
+      "verified_version": "3.0.0",
+      "source": "manual-curated",
+      "manual_actions": ["turn_in_complete_set", "liquidate_reward"],
+      "expected_execution_time_hours": 0.25,
+      "expected_sale_time_hours": 0.5,
+      "execution_risk": 0.1,
+      "strategy_confidence": 0.9
+    }
+  ]
+}

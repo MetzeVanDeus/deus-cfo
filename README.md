@@ -61,6 +61,14 @@ GitHub Actions runs the same checks used locally on pushes and pull requests:
 
 The workflow does not need repository secrets; runtime market APIs are accessed only by local/manual collection runs.
 
+## Divination-card routes
+
+The profit-route API includes the versioned `backend/div_card_recipes.json` registry. It currently contains one verified deterministic recipe (`The Doctor` → `Headhunter`); this is an explicit coverage limit, not a claim that every divination card is modeled. Random, corrupted, influenced, and otherwise unverified rewards are rejected.
+
+Routes remain visible as `theoretical`, `non_executable`, or `insufficient_evidence` when exact prices exist without executable depth (or when required prices are missing). The API reports missing evidence and keeps theoretical and executable ROI separate. Executable capacity and ROI stay zero/unknown when reward sell bids are absent; aggregate volume is never treated as fillable inventory, and Headhunter sell depth is never inferred from seller asks.
+
+`UniqueAccessory` is collected through the normal bounded collector so deterministic reward prices can be persisted alongside exchange snapshots. Optional trade depth (`DEUSCFO_TRADE_DEPTH=1`) queries exact recipe card names through the public PoE trade search/fetch API and stores only buy-side card levels as `pathofexile_trade_api` quotes. That API path does not provide reward sell bids; liquidation remains unavailable unless an actual supported adapter supplies `sell_levels`. `DEUSCFO_TRADE_DEPTH_LIMIT` (default 20) bounds listings per card; set `DEUSCFO_TRADE_USER_AGENT` to identify a deployment.
+
 ## Verify locally
 
 ```powershell

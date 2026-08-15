@@ -204,7 +204,9 @@ def test_loss_making_routes_remain_read_only_but_are_not_public_or_allocatable(m
 
     monkeypatch.setattr(main.market_data, "get_all_latest", latest)
     monkeypatch.setattr(main.strategies, "default_transformation_registry", _registry)
-    assert asyncio.run(main.get_profit_routes("Test", category="Currency"))["routes"] == []
+    response = asyncio.run(main.get_profit_routes("Test", category="Currency"))
+    assert response["routes"][0]["status"] == "theoretical"
+    assert response["routes"][0]["expected_net_profit"] < 0
 
 
 def test_placeholder_fixture_is_rejected():

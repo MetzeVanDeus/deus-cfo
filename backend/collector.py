@@ -3,8 +3,9 @@
 import argparse
 import asyncio
 import logging
+import math
 import os
-
+from datetime import datetime, timezone
 import httpx
 
 import cx_collector
@@ -31,7 +32,47 @@ _STASH_TYPES = {
         "UniqueJewel", "UniqueFlask", "Map", "BlightedMap", "UniqueMap",
     )
 }
-PERSISTED_CATEGORIES = frozenset(_EXCHANGE_TYPES)
+_COLLECTION_TYPES = {
+    **_EXCHANGE_TYPES,
+    # Deterministic div-card rewards need a real stash-backed price.
+    "UniqueAccessory": "UniqueAccessory",
+}
+
+TRADE_API_BASE = "https://www.pathofexile.com/api/trade"
+TRADE_DEPTH_ENV = "DEUSCFO_TRADE_DEPTH"
+TRADE_DEPTH_LIMIT_ENV = "DEUSCFO_TRADE_DEPTH_LIMIT"
+TRADE_USER_AGENT_ENV = "DEUSCFO_TRADE_USER_AGENT"
+TRADE_FEE_ENV = "DEUSCFO_TRADE_FEE_RATE"
+
+
+def trade_depth_enabled() -> bool:
+    return os.environ.get(TRADE_DEPTH_ENV, "").casefold() in {"1", "true", "yes", "on"}
+
+
+def _trade_limit() -> int:
+    try:
+        return max(1, min(50, int(os.environ.get(TRADE_DEPTH_LIMIT_ENV, "20"))))
+    except ValueError:
+        return 20
+
+
+def _trade_fee() -> float:
+    try:
+        value = float(os.environ.get(TRADE_FEE_ENV, "0"))
+    except ValueError:
+        return 0.0
+    return value if math.isfinite(value) and 0 <= value < 1 else 0.0
+
+
+def _trade_headers() -> dict[str, str]:
+    return {
+        "Content-Type": "application/json",
+        "User-Agent": os.environ.get(
+            TRADE_USER_AGENT_ENV,
+            "DeusCFO/3.0 (+https://github.com/MetzeVanDeus/deus-cfo)",
+        ),
+    }
+PERSISTED_CATEGORIES = frozenset(_COLLECTION_TYPES)
 
 
 def _format_slug(slug: str) -> str:
@@ -50,10 +91,10 @@ def stash_item_id(line: dict) -> str:
 
 
 def _normalize(line: dict, league: str, category: str, is_exchange: bool) -> dict:
-    """Map a poe.ninja line into a DIRECT_OBSERVATION snapshot record."""
+    """Map a poe.ninja line into a direct observation, preserving valid depth only."""
     if is_exchange:
         item_id = line.get("id", "")
-        return {
+        record = {
             "league": league,
             "category": category,
             "item_id": item_id,
@@ -67,20 +108,210 @@ def _normalize(line: dict, league: str, category: str, is_exchange: bool) -> dic
             "observation_type": "DIRECT_OBSERVATION",
             "confidence_grade": "B",
         }
+    else:
+        record = {
+            "league": league,
+            "category": category,
+            "item_id": stash_item_id(line),
+            "item_name": line.get("name", "Unknown"),
+            "variant": line.get("variant", "") or "",
+            "price_chaos": line.get("chaosValue", 0) or 0,
+            "volume": line.get("listingCount", 0) or line.get("count", 0) or 0,
+            "listing_count": line.get("listingCount", 0) or 0,
+            "icon": line.get("icon", "") or "",
+            "source": "poe.ninja",
+            "observation_type": "DIRECT_OBSERVATION",
+            "confidence_grade": "B",
+        }
+    quote = database.validate_execution_quote(line.get("execution_quote"))
+    if quote is not None:
+        record["execution_quote"] = quote
+    return record
+
+def _trade_price(entry: dict, chaos_per_divine: float) -> tuple[float, float] | None:
+    listing = entry.get("listing") if isinstance(entry, dict) else None
+    price = listing.get("price") if isinstance(listing, dict) else None
+    if not isinstance(price, dict):
+        return None
+    amount, currency = price.get("amount"), str(price.get("currency", "")).casefold()
+    if not isinstance(amount, (int, float)) or isinstance(amount, bool) or amount <= 0:
+        return None
+    multiplier = 1.0 if currency == "chaos" else chaos_per_divine if currency == "divine" else 0.0
+    if multiplier <= 0:
+        return None
+    item = entry.get("item") if isinstance(entry, dict) else None
+    quantity = item.get("stackSize", 1) if isinstance(item, dict) else 1
+    if not isinstance(quantity, (int, float)) or quantity <= 0:
+        quantity = 1
+    return float(amount) * multiplier, float(quantity)
+
+
+def _trade_quote(entries: list[dict], *, side: str, chaos_per_divine: float) -> dict | None:
+    levels: dict[float, float] = {}
+    observed = []
+    for entry in entries:
+        value = _trade_price(entry, chaos_per_divine)
+        if value is None:
+            continue
+        price, quantity = value
+        levels[price] = levels.get(price, 0.0) + quantity
+        indexed = (entry.get("listing") or {}).get("indexed") if isinstance(entry, dict) else None
+        if isinstance(indexed, str) and indexed:
+            observed.append(indexed)
+    if not levels:
+        return None
+    return {
+        f"{side}_levels": [
+            {"price": price, "quantity": quantity}
+            for price, quantity in sorted(levels.items())
+        ],
+        "fee_rate": _trade_fee(),
+        "observed_at": max(observed) if observed else datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "confidence": 0.6,
+        "source": "pathofexile_trade_api",
+    }
+
+
+class TradeDepthAdapter:
+    """Opt-in adapter for exact item depth from the public trade website API."""
+
+    def __init__(self, *, limit: int | None = None) -> None:
+        self.limit = limit or _trade_limit()
+
+    async def quote(
+        self,
+        client: httpx.AsyncClient,
+        league: str,
+        item_name: str,
+        *,
+        side: str,
+        chaos_per_divine: float,
+    ) -> dict | None:
+        if side != "buy":
+            return None
+        response = await client.post(
+            f"{TRADE_API_BASE}/search/{league}",
+            json={
+                "query": {"status": {"option": "online"}, "name": item_name},
+                "sort": {"price": "asc"},
+            },
+        )
+        if response.status_code != 200:
+            return None
+        search = response.json()
+        search_id = search.get("id") if isinstance(search, dict) else None
+        listing_ids = search.get("result", []) if isinstance(search, dict) else []
+        if not isinstance(search_id, str) or not isinstance(listing_ids, list):
+            return None
+        listing_ids = [item for item in listing_ids[:self.limit] if isinstance(item, str) and item]
+        if not listing_ids:
+            return None
+        response = await client.get(
+            f"{TRADE_API_BASE}/fetch/{','.join(listing_ids)}",
+            params={"query": search_id},
+        )
+        if response.status_code != 200:
+            return None
+        payload = response.json()
+        entries = payload.get("result", []) if isinstance(payload, dict) else []
+        if not isinstance(entries, list):
+            return None
+        return _trade_quote(entries, side="buy", chaos_per_divine=chaos_per_divine)
+
+    async def collect(
+        self,
+        league: str,
+        recipes: list[dict],
+        *,
+        chaos_per_divine: float = 0.0,
+    ) -> dict[str, dict]:
+        items = {
+            recipe["card_market_key"]: recipe["card"]
+            for recipe in recipes
+        }
+        quotes = {}
+        async with httpx.AsyncClient(timeout=20, headers=_trade_headers()) as client:
+            for key, name in items.items():
+                quote = await self.quote(
+                    client, league, name, side="buy", chaos_per_divine=chaos_per_divine
+                )
+                if quote is not None:
+                    quotes[key] = quote
+        return quotes
+
+
+
+def _quote_snapshot(key: str, name: str, quote: dict, *, league: str) -> dict | None:
+    category, separator, item_id = key.partition(":")
+    if not separator:
+        return None
+    levels = quote.get("buy_levels") or quote.get("sell_levels")
+    if not levels:
+        return None
     return {
         "league": league,
         "category": category,
-        "item_id": stash_item_id(line),
-        "item_name": line.get("name", "Unknown"),
-        "variant": line.get("variant", "") or "",
-        "price_chaos": line.get("chaosValue", 0) or 0,
-        "volume": line.get("listingCount", 0) or line.get("count", 0) or 0,
-        "listing_count": line.get("listingCount", 0) or 0,
-        "icon": line.get("icon", "") or "",
-        "source": "poe.ninja",
+        "item_id": item_id,
+        "item_name": name,
+        "variant": "",
+        "price_chaos": levels[0]["price"],
+        "volume": sum(level["quantity"] for level in levels),
+        "listing_count": len(levels),
+        "source": quote["source"],
         "observation_type": "DIRECT_OBSERVATION",
+        "observed_at": quote["observed_at"],
         "confidence_grade": "B",
+        "execution_quote": quote,
     }
+
+
+async def _stored_chaos_per_divine(league: str) -> float:
+    db = await database.get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT price_chaos FROM snapshots
+               WHERE league = ? AND category = 'Currency'
+                 AND (item_id = 'divine' OR item_name = 'Divine Orb')
+               ORDER BY timestamp DESC LIMIT 1""",
+            (league,),
+        )
+        row = await cursor.fetchone()
+        value = row["price_chaos"] if row else 0
+        return float(value) if isinstance(value, (int, float)) and value > 0 else 0.0
+    finally:
+        await db.close()
+
+
+async def collect_trade_depth(
+    league: str,
+    *,
+    timestamp: str | None = None,
+    adapter: TradeDepthAdapter | None = None,
+) -> dict[str, dict]:
+    """Collect opt-in trade depth and persist only validated quote-backed rows."""
+    from strategies import default_div_card_registry
+
+    registry = default_div_card_registry()
+    quotes = await (adapter or TradeDepthAdapter()).collect(
+        league,
+        list(registry.records()),
+        chaos_per_divine=await _stored_chaos_per_divine(league),
+    )
+    names = {}
+    for recipe in registry.records():
+        names[recipe["card_market_key"]] = recipe["card"]
+        names[recipe["reward_market_key"]] = recipe["reward_item"]
+        for outcome in recipe["outcomes"]:
+            names[outcome["reward_market_key"]] = outcome["reward_item"]
+    records = [
+        record
+        for key, quote in quotes.items()
+        if key in names
+        and (record := _quote_snapshot(key, names[key], quote, league=league)) is not None
+    ]
+    if records:
+        await database.insert_snapshots(records, timestamp=timestamp)
+    return quotes
 
 
 
@@ -133,14 +364,23 @@ async def collect_snapshot(league: str, category: str, exchange_types=None,
 
 
 async def collect_all_categories(league: str) -> dict[str, int]:
-    """Prune retained history, then collect bounded exchange categories."""
-    await database.prune_market_data(PERSISTED_CATEGORIES, league=league)
+    """Prune retained history, then collect exchange data plus required reward uniques."""
+    keep_categories = set(PERSISTED_CATEGORIES)
+    if trade_depth_enabled():
+        from strategies import default_div_card_registry
+
+        for recipe in default_div_card_registry().records():
+            for key in (recipe["card_market_key"], recipe["reward_market_key"]):
+                keep_categories.add(key.split(":", 1)[0])
+            for outcome in recipe["outcomes"]:
+                keep_categories.add(outcome["reward_market_key"].split(":", 1)[0])
+    await database.prune_market_data(keep_categories, league=league)
     if not database.collection_allowed():
         log.error("Collection paused: project storage reached the safety threshold")
-        return {category: 0 for category in _EXCHANGE_TYPES}
+        return {category: 0 for category in _COLLECTION_TYPES}
     results = {}
     timestamp = database.now_iso()
-    for category in _EXCHANGE_TYPES:
+    for category in _COLLECTION_TYPES:
         try:
             results[category] = await collect_snapshot(
                 league, category, _EXCHANGE_TYPES, _STASH_TYPES, timestamp
@@ -148,7 +388,15 @@ async def collect_all_categories(league: str) -> dict[str, int]:
         except Exception:
             log.exception("Failed to collect %s / %s", league, category)
             results[category] = 0
-    await database.prune_market_data(PERSISTED_CATEGORIES, league=league)
+    if trade_depth_enabled():
+        try:
+            results["trade_depth"] = len(
+                await collect_trade_depth(league, timestamp=timestamp)
+            )
+        except Exception:
+            log.exception("Failed to collect trade depth for %s", league)
+            results["trade_depth"] = 0
+    await database.prune_market_data(keep_categories, league=league)
     return results
 
 

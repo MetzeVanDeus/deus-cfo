@@ -126,6 +126,45 @@ def test_snapshot_observations_are_idempotent(tmp_path, monkeypatch):
         assert await database.count_rows() == 1
 
     asyncio.run(run())
+def test_execution_quote_attachment_preserves_snapshot_provenance(tmp_path, monkeypatch):
+    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "provenance.db"))
+    database._schema_path = None
+    aggregate = {
+        "league": "Allflame", "category": "UniqueAccessory", "item_id": "headhunter",
+        "item_name": "Headhunter", "price_chaos": 410, "volume": 17,
+        "listing_count": 3, "source": "poe.ninja", "observation_type": "DIRECT_OBSERVATION",
+        "observed_at": "2026-08-15T00:00:00Z", "market_timestamp": "2026-08-15T00:00:00Z",
+        "confidence_grade": "B",
+    }
+    quote = {
+        **aggregate,
+        "price_chaos": 399, "volume": 4, "listing_count": 4,
+        "source": "pathofexile_trade_api",
+        "execution_quote": {
+            "sell_levels": [{"price": 399, "quantity": 4}],
+            "observed_at": "2026-08-15T00:00:00Z", "confidence": 0.6,
+            "source": "pathofexile_trade_api",
+        },
+    }
+
+    async def run():
+        timestamp = "2026-08-15T00:00:00Z"
+        assert await database.insert_snapshots([aggregate], timestamp) == 1
+        assert await database.insert_snapshots([quote], timestamp) == 1
+        db = await database.get_db()
+        try:
+            row = await (await db.execute(
+                "SELECT price_chaos, volume, listing_count, source, observed_at, execution_quote "
+                "FROM snapshots"
+            )).fetchone()
+            assert tuple(row[:5]) == (410, 17, 3, "poe.ninja", "2026-08-15T00:00:00Z")
+            assert row["execution_quote"] is not None
+        finally:
+            await db.close()
+
+    asyncio.run(run())
+
+
 
 
 def test_market_writes_stop_at_project_safety_threshold(tmp_path, monkeypatch):
