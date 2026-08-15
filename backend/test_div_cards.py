@@ -31,6 +31,7 @@ def recipe(**changes):
         "special_conditions": [],
         "deterministic": True,
         "verified_version": "3.0",
+        "poe_patch": "3.28",
         "source": "test",
         "manual_actions": [],
         "expected_execution_time_hours": 1,
@@ -87,6 +88,18 @@ def test_registry_is_versioned_strict_and_unique():
         DivCardRegistry([recipe(card_market_key="DivinationCard")], version="3.0", source="test")
     with pytest.raises(ValueError, match="verified_version .* registry version"):
         DivCardRegistry([recipe(verified_version="2.9")], version="3.0", source="test")
+
+def test_poe_patch_metadata_is_separate_and_active_patch_is_required_for_verification():
+    registry = DivCardRegistry([recipe()], version="3.0", source="test", poe_patch="3.28")
+    assert registry.version == "3.0"
+    assert registry.poe_patch == "3.28"
+    provider = DivinationCardStrategyProvider(registry)
+    matching = provider.evaluate({**market_context(depth=False), "active_poe_patch": "3.28"})
+    assert matching and matching[0].theoretical_roi is not None
+    assert matching[0].poe_patch == "3.28"
+    assert provider.evaluate({**market_context(depth=False), "active_poe_patch": "3.27"}) == []
+    with pytest.raises(ValueError, match="poe_patch .* registry patch"):
+        DivCardRegistry([recipe(poe_patch="3.27")], version="3.0", source="test", poe_patch="3.28")
 
 
 def test_unknown_depth_is_unscalable_and_not_discoverable():
@@ -168,6 +181,7 @@ def test_profit_routes_endpoint_exposes_card_routes(monkeypatch):
     async def latest(_league):
         return rows
     monkeypatch.setattr(main.market_data, "get_all_latest", latest)
+    monkeypatch.setattr(main, "resolve_active_poe_patch", lambda _league: asyncio.sleep(0, result="3.28"))
     monkeypatch.setattr(main.strategies, "default_div_card_registry", lambda: DivCardRegistry([recipe()], version="3.0", source="test"))
     result = asyncio.run(main.get_profit_routes("Test"))
     assert result["routes"]
@@ -197,6 +211,7 @@ def test_actual_recipe_snapshot_ids_produce_theoretical_route(monkeypatch):
             }],
         }
 
+    monkeypatch.setattr(main, "resolve_active_poe_patch", lambda _league: asyncio.sleep(0, result="3.29.0"))
     monkeypatch.setattr(main.market_data, "get_all_latest", latest)
     result = asyncio.run(main.get_profit_routes("Test", category="DivinationCard"))
     route = result["routes"][0]
@@ -225,6 +240,7 @@ def test_profit_routes_keeps_theoretical_route_when_reward_has_no_sell_depth(mon
 
     async def latest(_league):
         return rows
+    monkeypatch.setattr(main, "resolve_active_poe_patch", lambda _league: asyncio.sleep(0, result="3.28"))
 
     monkeypatch.setattr(main.market_data, "get_all_latest", latest)
     monkeypatch.setattr(
@@ -239,7 +255,32 @@ def test_profit_routes_keeps_theoretical_route_when_reward_has_no_sell_depth(mon
     assert route["expected_net_profit"] == 0
     assert route["executable_roi"] is None
     assert route["market_capacity"] == 0
+
     assert any("missing buy depth" in reason for reason in route["reasons"])
+def test_profit_routes_fail_closed_without_matching_active_patch(monkeypatch):
+    async def latest(_league):
+        return {
+            "DivinationCard": [{
+                "item_id": "the-doctor", "item_name": "The Doctor", "price_chaos": 42,
+                "source": "poe.ninja", "confidence_grade": "B",
+            }],
+            "UniqueAccessory": [{
+                "item_id": "headhunter-leather-belt", "item_name": "Headhunter", "price_chaos": 410,
+                "source": "poe.ninja", "confidence_grade": "B",
+            }],
+        }
+
+    monkeypatch.setattr(main.market_data, "get_all_latest", latest)
+    monkeypatch.setattr(main, "resolve_active_poe_patch", lambda _league: asyncio.sleep(0, result=None))
+    unknown = asyncio.run(main.get_profit_routes("Allflame", category="DivinationCard"))
+    assert unknown["patch_status"] == "unknown"
+    assert unknown["routes"] == []
+    assert any("unknown" in reason for reason in unknown["patch_reasons"])
+
+    monkeypatch.setattr(main, "resolve_active_poe_patch", lambda _league: asyncio.sleep(0, result="3.28"))
+    stale = asyncio.run(main.get_profit_routes("Allflame", category="DivinationCard"))
+    assert stale["routes"] == []
+    assert stale["patch_status"] == "mismatch"
 
 
 def test_capital_planning_receives_card_opportunity(monkeypatch, tmp_path):
@@ -270,6 +311,7 @@ def test_capital_planning_receives_card_opportunity(monkeypatch, tmp_path):
     monkeypatch.setattr(main.market_data, "get_all_latest", latest)
     monkeypatch.setattr(main.opportunity, "get_all_opportunities", no_opportunities)
     monkeypatch.setattr(main, "_resolve_chaos_per_divine", lambda _league: asyncio.sleep(0, result=10))
+    monkeypatch.setattr(main, "resolve_active_poe_patch", lambda _league: asyncio.sleep(0, result="3.28"))
     monkeypatch.setattr(main.strategies, "default_div_card_registry", lambda: DivCardRegistry([recipe()], version="3.0", source="test"))
     monkeypatch.setattr(main.capital, "build_capital_plan", build)
     request = main.CapitalPlanRequest(
@@ -279,6 +321,16 @@ def test_capital_planning_receives_card_opportunity(monkeypatch, tmp_path):
     asyncio.run(main.create_capital_plan(request))
     card = next(item for item in captured["candidates"] if item.strategy_type == "divination_card")
     assert card.metadata["capacity_units"] == "sets"
+
+    for active_patch in (None, "3.29"):
+        monkeypatch.setattr(
+            main,
+            "resolve_active_poe_patch",
+            lambda _league, active_patch=active_patch: asyncio.sleep(0, result=active_patch),
+        )
+        captured["candidates"] = []
+        asyncio.run(main.create_capital_plan(request))
+        assert not any(item.strategy_type == "divination_card" for item in captured["candidates"])
     assert card.metadata["profit_route"]["sets_possible_with_budget"] == 1
 
 def test_collector_database_and_market_context_preserve_execution_quote(monkeypatch, tmp_path):

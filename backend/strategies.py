@@ -44,14 +44,15 @@ class ProfitRoute(BaseModel):
     market_capacity: int = 0
     capacity_horizon_hours: float = 0.0
     capacity_assumptions: list[str] = Field(default_factory=list)
+    reasons: list[str] = Field(default_factory=list)
     confidence: float = 0.0
     pricing_confidence: float = 0.0
     strategy_confidence: float = 0.0
     execution_risk: float = 0.0
     liquidity: dict[str, Any] = Field(default_factory=dict)
-    reasons: list[str] = Field(default_factory=list)
     source: str = "unverified"
     verified_version: str = "unverified"
+    poe_patch: str | None = None
     verification_metadata: dict[str, Any] = Field(default_factory=dict)
     inputs: list[dict[str, Any]] = Field(default_factory=list)
     costs: list[dict[str, Any]] = Field(default_factory=list)
@@ -475,8 +476,8 @@ class DivCardRecipe(BaseModel):
     special_conditions: list[str]
     deterministic: bool
     trusted_distribution: bool = False
-    outcomes: list[dict[str, Any]] = Field(default_factory=list)
     verified_version: str
+    poe_patch: str
     source: str
     manual_actions: list[str]
     expected_execution_time_hours: float = 0.25
@@ -488,7 +489,7 @@ _DIV_CARD_ALLOWED_KEYS = {
     "id", "card", "set_size", "card_market_key", "reward_type", "reward_item",
     "reward_quantity", "reward_market_key", "variant", "corrupted", "item_level",
     "special_conditions", "deterministic", "trusted_distribution", "outcomes",
-    "verified_version", "source", "manual_actions", "expected_execution_time_hours",
+    "verified_version", "poe_patch", "source", "manual_actions", "expected_execution_time_hours",
     "expected_sale_time_hours", "execution_risk", "strategy_confidence",
 }
 
@@ -503,13 +504,13 @@ def validate_div_card_recipe(record: Mapping[str, Any]) -> dict[str, Any]:
     required = {
         "id", "card", "set_size", "card_market_key", "reward_type", "reward_item",
         "reward_quantity", "reward_market_key", "variant", "corrupted", "item_level",
-        "special_conditions", "deterministic", "verified_version", "source", "manual_actions",
+        "special_conditions", "deterministic", "verified_version", "poe_patch", "source", "manual_actions",
     }
     missing = required - set(record)
     if missing:
         raise ValueError(f"incomplete divination-card recipe: missing {sorted(missing)}")
     for field in ("id", "card", "reward_type", "reward_item", "card_market_key", "reward_market_key",
-                  "verified_version", "source"):
+                  "verified_version", "poe_patch", "source"):
         if not isinstance(record[field], str) or not record[field].strip():
             raise ValueError(f"{field} is required")
     for field in ("card_market_key", "reward_market_key"):
@@ -584,19 +585,29 @@ STALE_RECIPE_POLICY = "reject"
 
 
 class DivCardRegistry:
-    """Versioned data-only registry for canonical divination-card rewards.
+    """Versioned registry with a separate Path of Exile verification patch."""
 
-    A recipe whose verified_version differs from this registry's version is
-    rejected at load time; this keeps stale prices out of normal endpoints,
-    which do not carry a separate active-version argument.
-    """
-
-    def __init__(self, records: Sequence[Mapping[str, Any]] = (), *, version: str = "unverified",
-                 source: str = "unverified") -> None:
-        if not isinstance(version, str) or not version.strip() or not isinstance(source, str) or not source.strip():
+    def __init__(
+        self,
+        records: Sequence[Mapping[str, Any]] = (),
+        *,
+        version: str = "unverified",
+        source: str = "unverified",
+        poe_patch: str | None = None,
+    ) -> None:
+        records = tuple(records)
+        if not all(isinstance(value, str) and value.strip() for value in (version, source)):
             raise ValueError("registry version and source are required")
+        if poe_patch is None:
+            patches = {str(record.get("poe_patch", "")).strip() for record in records}
+            if len(patches) != 1 or not next(iter(patches), ""):
+                raise ValueError("registry poe_patch is required when recipes do not share one patch")
+            poe_patch = next(iter(patches))
+        if not isinstance(poe_patch, str) or not poe_patch.strip():
+            raise ValueError("registry poe_patch is required")
         self.version = version
         self.source = source
+        self.poe_patch = poe_patch
         self._records: dict[str, dict[str, Any]] = {}
         for record in records:
             normalized = validate_div_card_recipe(record)
@@ -607,6 +618,13 @@ class DivCardRegistry:
                         f"verified_version {normalized['verified_version']} != registry version {self.version}"
                     )
                 continue
+            if normalized["poe_patch"] != self.poe_patch:
+                if STALE_RECIPE_POLICY == "reject":
+                    raise ValueError(
+                        f"stale divination-card recipe {normalized['id']} from {normalized['source']}: "
+                        f"poe_patch {normalized['poe_patch']} != registry patch {self.poe_patch}"
+                    )
+                continue
             if normalized["id"] in self._records:
                 raise ValueError(f"duplicate divination-card recipe: {normalized['id']}")
             self._records[normalized["id"]] = normalized
@@ -614,11 +632,16 @@ class DivCardRegistry:
     @classmethod
     def from_json(cls, path: str | Path) -> "DivCardRegistry":
         payload = json.loads(Path(path).read_text(encoding="utf-8"))
-        if not isinstance(payload, Mapping) or set(payload) != {"version", "source", "recipes"}:
-            raise ValueError("divination-card registry must contain version, source, and recipes")
+        if not isinstance(payload, Mapping) or set(payload) != {"version", "source", "poe_patch", "recipes"}:
+            raise ValueError("divination-card registry must contain version, source, poe_patch, and recipes")
         if not isinstance(payload["recipes"], list):
             raise ValueError("divination-card recipes must be a list")
-        return cls(payload["recipes"], version=payload["version"], source=payload["source"])
+        return cls(
+            payload["recipes"],
+            version=payload["version"],
+            source=payload["source"],
+            poe_patch=payload["poe_patch"],
+        )
 
     def records(self) -> tuple[dict[str, Any], ...]:
         return tuple(dict(record) for record in self._records.values())
@@ -710,6 +733,7 @@ class DivinationCardStrategyProvider:
         records = context.get("price_records", {})
         execution_prices = context.get("execution_prices", {})
         active_version = context.get("active_registry_version")
+        active_poe_patch = context.get("active_poe_patch")
         league = context.get("league")
         horizon = float(context.get("capacity_horizon_hours", 24) or 24)
         budget = context.get("budget_chaos")
@@ -721,6 +745,8 @@ class DivinationCardStrategyProvider:
             reasons = ["versioned structured div-card registry"]
             if active_version is not None and active_version != self.registry.version:
                 continue
+            if active_poe_patch is not None and active_poe_patch != recipe["poe_patch"]:
+                continue
             if recipe["deterministic"]:
                 outcomes = [{
                     "reward_item": recipe["reward_item"], "reward_quantity": recipe["reward_quantity"],
@@ -731,6 +757,7 @@ class DivinationCardStrategyProvider:
             else:
                 outcomes = recipe["outcomes"]
                 reasons.append("trusted finite-outcome reward distribution verified")
+            reasons.append(f"verified against PoE patch {recipe['poe_patch']}")
             card_price = _exact_price_info(prices, records, recipe["card_market_key"])
             if card_price is None:
                 reasons.append(f"missing market price: {recipe['card_market_key']}")
@@ -841,6 +868,7 @@ class DivinationCardStrategyProvider:
                     "buy and sell depth are exact quote levels",
                     "unknown depth produces zero scalable sets",
                 ],
+                reasons=list(reasons),
                 confidence=confidence,
                 pricing_confidence=pricing_confidence,
                 strategy_confidence=strategy_confidence,
@@ -850,14 +878,16 @@ class DivinationCardStrategyProvider:
                     "volume": market_capacity,
                     "capacity_units": "sets",
                 },
-                reasons=reasons,
                 source=source,
                 verified_version=recipe["verified_version"],
+                poe_patch=recipe["poe_patch"],
                 verification_metadata={
                     "registry_version": self.registry.version,
                     "registry_source": self.registry.source,
                     "definition_source": recipe["source"],
                     "verified_version": recipe["verified_version"],
+                    "poe_patch": recipe["poe_patch"],
+                    "active_poe_patch": active_poe_patch,
                     "manual_actions": list(recipe["manual_actions"]),
                     "variant": recipe["variant"],
                     "corrupted": recipe["corrupted"],

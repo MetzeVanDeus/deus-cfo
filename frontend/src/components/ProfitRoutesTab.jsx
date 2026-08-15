@@ -17,13 +17,14 @@ const list = (items) => Array.isArray(items) ? items : items == null ? [] : [ite
 export function ProfitRoutesTab({ categories = [], selectedLeague }) {
   const [routes, setRoutes] = useState([])
   const [category, setCategory] = useState('')
+  const [patch, setPatch] = useState({ status: '', reasons: [] })
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-
   useEffect(() => {
     let cancelled = false
     if (!selectedLeague) {
       setRoutes([])
+      setPatch({ status: '', reasons: [] })
       setError('')
       setLoading(false)
       return () => { cancelled = true }
@@ -33,7 +34,14 @@ export function ProfitRoutesTab({ categories = [], selectedLeague }) {
     const params = { league: selectedLeague }
     if (category) params.category = category
     api.get('/profit-routes', { params })
-      .then(({ data }) => { if (!cancelled) setRoutes(Array.isArray(data) ? data : data?.routes || []) })
+      .then(({ data }) => {
+        if (cancelled) return
+        setRoutes(Array.isArray(data) ? data : data?.routes || [])
+        setPatch({
+          status: data?.patch_status || '',
+          reasons: Array.isArray(data?.patch_reasons) ? data.patch_reasons : [],
+        })
+      })
       .catch((err) => { if (!cancelled) setError(err.response?.data?.detail || 'Profit routes unavailable.') })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
@@ -44,8 +52,8 @@ export function ProfitRoutesTab({ categories = [], selectedLeague }) {
     <div className="terminal-panel strategy-form"><div className="form-row form-row-main"><label className="field"><span>Category</span><select className="input" value={category} onChange={(event) => setCategory(event.target.value)}><option value="">All categories</option>{categories.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label></div></div>
     {!selectedLeague && <div className="terminal-panel"><EmptyState title="Select a league" message="Profit routes wait for a selected league before requesting market data." /></div>}
     {selectedLeague && loading && <div className="terminal-panel"><LoadingState text="Loading profit routes…" /></div>}
-    {selectedLeague && !loading && error && <ErrorState message={error} />}
-    {selectedLeague && !loading && !error && !routes.length && <div className="terminal-panel"><EmptyState title="No route evidence" message="No registered provider has enough market data to describe a route for this league and category." /></div>}
+    {selectedLeague && !loading && !error && patch.status !== 'resolved' && patch.reasons.length > 0 && <div className="terminal-panel"><div className="panel-title"><h2>Patch verification blocked</h2><span>STATUS · {patch.status.toUpperCase()}</span></div><ul className="dense-list">{patch.reasons.map((reason, index) => <li key={index}><span className="signal-mark" />{reason}</li>)}</ul></div>}
+    {selectedLeague && !loading && !error && patch.status === 'resolved' && !routes.length && <div className="terminal-panel"><EmptyState title="No route evidence" message="No registered provider has enough market data to describe a route for this league and category." /></div>}
     {selectedLeague && !loading && !error && routes.length > 0 && <div className="profit-routes">{routes.map((route, index) => <RouteCard key={route.transformation_id || index} route={route} />)}</div>}
   </div>
 }

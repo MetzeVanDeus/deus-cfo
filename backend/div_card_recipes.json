@@ -1,6 +1,7 @@
 {
   "version": "3.0.0",
   "source": "manual-curated",
+  "poe_patch": "3.29.0",
   "recipes": [
     {
       "id": "the-doctor-to-headhunter",
@@ -17,6 +18,7 @@
       "special_conditions": [],
       "deterministic": true,
       "verified_version": "3.0.0",
+      "poe_patch": "3.29.0",
       "source": "manual-curated",
       "manual_actions": ["turn_in_complete_set", "liquidate_reward"],
       "expected_execution_time_hours": 0.25,

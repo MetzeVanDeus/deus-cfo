@@ -63,7 +63,7 @@ The workflow does not need repository secrets; runtime market APIs are accessed 
 
 ## Divination-card routes
 
-The profit-route API includes the versioned `backend/div_card_recipes.json` registry. It currently contains one verified deterministic recipe (`The Doctor` → `Headhunter`); this is an explicit coverage limit, not a claim that every divination card is modeled. Random, corrupted, influenced, and otherwise unverified rewards are rejected.
+The profit-route API includes the versioned `backend/div_card_recipes.json` registry. `version`/`verified_version` identify the DeusCFO registry contract; the separate `poe_patch` metadata identifies the Path of Exile game patch used to verify the recipe. The current curated deterministic recipe (`The Doctor` -> `Headhunter`) is verified for PoE `3.29.0`; this is an explicit coverage limit, not a claim that every divination card is modeled. Random, corrupted, influenced, and otherwise unverified rewards are rejected. `GET /api/profit-routes` derives active patch metadata from the explicit `DEUSCFO_ACTIVE_POE_PATCH` setting (a scalar patch or JSON league map); it never trusts a query-string override and withholds divination-card routes when metadata is unknown or mismatched.
 
 Routes remain visible as `theoretical`, `non_executable`, or `insufficient_evidence` when exact prices exist without executable depth (or when required prices are missing). The API reports missing evidence and keeps theoretical and executable ROI separate. Executable capacity and ROI stay zero/unknown when reward sell bids are absent; aggregate volume is never treated as fillable inventory, and Headhunter sell depth is never inferred from seller asks.
 

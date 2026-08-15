@@ -93,7 +93,7 @@ def test_profit_routes_api_uses_latest_market_rows(monkeypatch):
     monkeypatch.setattr(main.market_data, "get_all_latest", latest)
     monkeypatch.setattr(main.strategies, "default_transformation_registry", _registry)
     response = asyncio.run(main.get_profit_routes("Test", category="Currency"))
-    assert set(response) == {"league", "category", "routes"}
+    assert set(response) == {"league", "category", "poe_patch", "patch_status", "patch_reasons", "routes"}
     assert response["league"] == "Test"
     assert response["category"] == "Currency"
     assert response["routes"][0]["transformation_id"] == "test-route"

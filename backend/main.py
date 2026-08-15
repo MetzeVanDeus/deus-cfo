@@ -6,6 +6,7 @@ import math
 import asyncio
 import json
 import logging
+import os
 import database
 import collector
 import market_data
@@ -501,6 +502,7 @@ async def create_capital_plan(request: CapitalPlanRequest):
                 for item in current
             ]
             market = _latest_market_context(await market_data.get_all_latest(request.league))
+            active_poe_patch = await resolve_active_poe_patch(request.league)
             provider = strategies.TransformationStrategyProvider(
                 strategies.default_transformation_registry()
             )
@@ -509,11 +511,14 @@ async def create_capital_plan(request: CapitalPlanRequest):
                 "bankroll": request.bankroll.total_net_worth,
                 **market,
                 "chaos_per_divine": chaos_per_divine,
+                "active_poe_patch": active_poe_patch,
             }
             candidates.extend(provider.discover(provider_context))
-            candidates.extend(strategies.DivinationCardStrategyProvider(
-                strategies.default_div_card_registry()
-            ).discover(provider_context))
+            div_registry = strategies.default_div_card_registry()
+            if active_poe_patch == div_registry.poe_patch:
+                candidates.extend(strategies.DivinationCardStrategyProvider(
+                    div_registry
+                ).discover(provider_context))
         plan = capital.build_capital_plan(
             request.bankroll,
             request.preferences,
@@ -766,6 +771,7 @@ async def list_divination_cards():
     return {
         "version": registry.version,
         "source": registry.source,
+        "poe_patch": registry.poe_patch,
         "recipes": list(registry.records()),
     }
 
@@ -818,23 +824,71 @@ def _latest_market_context(latest: dict) -> dict:
     }
 
 
+async def resolve_active_poe_patch(league: str) -> str | None:
+    """Return explicit active game-patch metadata for a league.
+
+    The league APIs expose league names, not the game patch that verified a
+    recipe.  Deployments must provide that metadata explicitly; unknown
+    patches fail closed instead of treating stale recipes as verified.
+    """
+    raw = os.getenv("DEUSCFO_ACTIVE_POE_PATCH", "").strip()
+    if not raw:
+        return None
+    try:
+        mapping = json.loads(raw)
+    except json.JSONDecodeError:
+        return raw
+    if isinstance(mapping, dict):
+        value = mapping.get(league) or mapping.get("*")
+        return str(value).strip() if value else None
+    return str(mapping).strip() if mapping else None
+
+
 @app.get("/api/profit-routes")
-async def get_profit_routes(league: str, category: str | None = None):
-    """Evaluate routes, including theoretical routes lacking executable evidence."""
+async def get_profit_routes(
+    league: str,
+    category: str | None = None,
+    poe_patch: str | None = None,
+):
+    """Evaluate routes using explicit active PoE patch metadata.
+
+    ``poe_patch`` is retained only for response compatibility; callers cannot
+    override the active metadata used for verification.
+    """
     if category and category not in ALL_CATEGORIES and category != "Transformation":
         raise HTTPException(status_code=400, detail=f"unknown category: {category}")
+    active_poe_patch = await resolve_active_poe_patch(league)
     market = _latest_market_context(await market_data.get_all_latest(league))
-    context = {"league": league, "category": category, **market}
+    context = {"league": league, "category": category, "active_poe_patch": active_poe_patch, **market}
     routes = list(strategies.TransformationStrategyProvider(
         strategies.default_transformation_registry()
     ).evaluate(context))
-    if category in (None, "DivinationCard"):
+    div_registry = strategies.default_div_card_registry() if category in (None, "DivinationCard") else None
+    if not active_poe_patch:
+        patch_reasons = ["active PoE patch metadata is unknown; divination-card recipes are withheld"]
+    elif div_registry is not None and active_poe_patch != div_registry.poe_patch:
+        patch_reasons = [
+            f"active PoE patch {active_poe_patch} does not match recipe patch {div_registry.poe_patch}; "
+            "divination-card recipes are withheld"
+        ]
+    else:
+        patch_reasons = ["active PoE patch metadata resolved"]
+    if not active_poe_patch:
+        patch_status = "unknown"
+    elif div_registry is not None and active_poe_patch != div_registry.poe_patch:
+        patch_status = "mismatch"
+    else:
+        patch_status = "resolved"
+    if div_registry is not None and active_poe_patch == div_registry.poe_patch:
         routes.extend(strategies.DivinationCardStrategyProvider(
-            strategies.default_div_card_registry()
+            div_registry
         ).evaluate(context))
     return {
         "league": league,
         "category": category,
+        "poe_patch": active_poe_patch,
+        "patch_status": patch_status,
+        "patch_reasons": patch_reasons,
         "routes": [route.model_dump() for route in sorted(
             routes,
             key=lambda route: (
