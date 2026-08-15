@@ -162,6 +162,11 @@ def test_default_registry_loads_curated_version():
     assert registry.version == "3.0.0"
     assert registry.records()[0]["deterministic"] is True
 
+def test_active_patch_resolves_from_verified_league_without_environment(monkeypatch):
+    monkeypatch.delenv("DEUSCFO_ACTIVE_POE_PATCH", raising=False)
+    assert asyncio.run(main.resolve_active_poe_patch("Allflame")) == "3.29.0"
+    assert asyncio.run(main.resolve_active_poe_patch("Standard")) is None
+
 
 def test_profit_routes_endpoint_exposes_card_routes(monkeypatch):
     rows = {

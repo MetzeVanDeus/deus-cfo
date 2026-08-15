@@ -594,6 +594,7 @@ class DivCardRegistry:
         version: str = "unverified",
         source: str = "unverified",
         poe_patch: str | None = None,
+        verified_leagues: Sequence[str] = (),
     ) -> None:
         records = tuple(records)
         if not all(isinstance(value, str) and value.strip() for value in (version, source)):
@@ -605,9 +606,12 @@ class DivCardRegistry:
             poe_patch = next(iter(patches))
         if not isinstance(poe_patch, str) or not poe_patch.strip():
             raise ValueError("registry poe_patch is required")
+        if not all(isinstance(league, str) and league.strip() for league in verified_leagues):
+            raise ValueError("verified_leagues must contain non-empty league names")
         self.version = version
         self.source = source
         self.poe_patch = poe_patch
+        self.verified_leagues = frozenset(verified_leagues)
         self._records: dict[str, dict[str, Any]] = {}
         for record in records:
             normalized = validate_div_card_recipe(record)
@@ -632,15 +636,20 @@ class DivCardRegistry:
     @classmethod
     def from_json(cls, path: str | Path) -> "DivCardRegistry":
         payload = json.loads(Path(path).read_text(encoding="utf-8"))
-        if not isinstance(payload, Mapping) or set(payload) != {"version", "source", "poe_patch", "recipes"}:
-            raise ValueError("divination-card registry must contain version, source, poe_patch, and recipes")
-        if not isinstance(payload["recipes"], list):
-            raise ValueError("divination-card recipes must be a list")
+        required = {"version", "source", "poe_patch", "verified_leagues", "recipes"}
+        if not isinstance(payload, Mapping) or set(payload) != required:
+            raise ValueError(
+                "divination-card registry must contain version, source, poe_patch, "
+                "verified_leagues, and recipes"
+            )
+        if not isinstance(payload["recipes"], list) or not isinstance(payload["verified_leagues"], list):
+            raise ValueError("divination-card recipes and verified_leagues must be lists")
         return cls(
             payload["recipes"],
             version=payload["version"],
             source=payload["source"],
             poe_patch=payload["poe_patch"],
+            verified_leagues=payload["verified_leagues"],
         )
 
     def records(self) -> tuple[dict[str, Any], ...]:

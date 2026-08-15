@@ -2,6 +2,7 @@
   "version": "3.0.0",
   "source": "manual-curated",
   "poe_patch": "3.29.0",
+  "verified_leagues": ["Allflame", "Hardcore Allflame"],
   "recipes": [
     {
       "id": "the-doctor-to-headhunter",

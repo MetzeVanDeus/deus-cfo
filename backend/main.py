@@ -772,6 +772,7 @@ async def list_divination_cards():
         "version": registry.version,
         "source": registry.source,
         "poe_patch": registry.poe_patch,
+        "verified_leagues": sorted(registry.verified_leagues),
         "recipes": list(registry.records()),
     }
 
@@ -825,23 +826,19 @@ def _latest_market_context(latest: dict) -> dict:
 
 
 async def resolve_active_poe_patch(league: str) -> str | None:
-    """Return explicit active game-patch metadata for a league.
-
-    The league APIs expose league names, not the game patch that verified a
-    recipe.  Deployments must provide that metadata explicitly; unknown
-    patches fail closed instead of treating stale recipes as verified.
-    """
+    """Resolve an operator override or the checked-in patch for a verified league."""
     raw = os.getenv("DEUSCFO_ACTIVE_POE_PATCH", "").strip()
-    if not raw:
-        return None
-    try:
-        mapping = json.loads(raw)
-    except json.JSONDecodeError:
-        return raw
-    if isinstance(mapping, dict):
-        value = mapping.get(league) or mapping.get("*")
-        return str(value).strip() if value else None
-    return str(mapping).strip() if mapping else None
+    if raw:
+        try:
+            mapping = json.loads(raw)
+        except json.JSONDecodeError:
+            return raw
+        if isinstance(mapping, dict):
+            value = mapping.get(league) or mapping.get("*")
+            return str(value).strip() if value else None
+        return str(mapping).strip() if mapping else None
+    registry = strategies.default_div_card_registry()
+    return registry.poe_patch if league in registry.verified_leagues else None
 
 
 @app.get("/api/profit-routes")
