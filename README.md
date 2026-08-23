@@ -18,30 +18,62 @@ Captured from the packaged Windows service at a 1920×1080 browser viewport; scr
 
 ## Download and run
 
-A Windows download, when a tagged release has been published, is available from [GitHub Releases](https://github.com/MetzeVanDeus/deus-cfo/releases). The local packaging path is [`scripts/build_windows.ps1`](scripts/build_windows.ps1): it builds the frontend, packages the service with pinned PyInstaller, and emits `SHA256SUMS.txt`. Releases are checksummed but not signed; this repository does not claim clean-machine verification.
+### Windows
 
-For a source checkout on Windows:
+#### Packaged release
+
+1. Download `DeusCFO-windows-x64.zip` and `SHA256SUMS.txt` from the [latest GitHub release](https://github.com/MetzeVanDeus/deus-cfo/releases/latest).
+2. Verify the ZIP before extracting it:
+
+```powershell
+$expected = (Get-Content .\SHA256SUMS.txt).Split()[0]
+$actual = (Get-FileHash .\DeusCFO-windows-x64.zip -Algorithm SHA256).Hash
+if ($actual -ne $expected) { throw "Checksum mismatch" }
+```
+
+3. Extract and launch:
+
+```powershell
+Expand-Archive .\DeusCFO-windows-x64.zip -DestinationPath .\DeusCFO-release
+cd .\DeusCFO-release\DeusCFO
+.\DeusCFO.exe open
+```
+
+Use `.\DeusCFO.exe status`, `.\DeusCFO.exe restart`, and `.\DeusCFO.exe stop` to manage it. Releases are checksummed but not signed.
+
+#### Source checkout
+
+Requires Python 3.12 and Node.js 20 or newer:
 
 ```powershell
 python -m venv .venv
+.\.venv\Scripts\Activate.ps1
 python -m pip install -r backend\requirements.txt
-cd frontend
-npm ci
-cd ..
-python deuscfo.py dev
-```
-
-`dev` is explicit: it starts Vite on port 3000, the loopback API on port 8000, and the collector. Open <http://127.0.0.1:3000>.
-
-For the normal production path, build `frontend/dist` first, then run:
-
-```powershell
+npm ci --prefix frontend
+npm run build --prefix frontend
 python deuscfo.py start
-python deuscfo.py status
-python deuscfo.py stop
 ```
 
-The launcher starts only the loopback backend and collector; FastAPI serves the production frontend at <http://127.0.0.1:8000>. It does not start Vite. Logs are written to `logs/backend.log` and `logs/collector.log`; `status` reports owned PIDs and storage limits; `stop` terminates only DeusCFO-owned processes. The launcher opens port 8000 with `python deuscfo.py open`.
+Open <http://127.0.0.1:8000>. For development with Vite and hot reload, run `python deuscfo.py dev` and open <http://127.0.0.1:3000>.
+
+### Linux
+
+Linux runs natively from source; no Linux binary is published yet. Install Python 3.12, Node.js 20 or newer, npm, and Git, then run:
+
+```bash
+git clone https://github.com/MetzeVanDeus/deus-cfo.git
+cd deus-cfo
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r backend/requirements.txt
+npm ci --prefix frontend
+npm run build --prefix frontend
+python deuscfo.py start
+```
+
+Open <http://127.0.0.1:8000>. Use `python deuscfo.py status`, `python deuscfo.py restart`, and `python deuscfo.py stop` to manage it. For development, run `python deuscfo.py dev` and open <http://127.0.0.1:3000>.
+
+The production launcher starts the loopback backend and collector; FastAPI serves the built frontend without Vite. Logs are written to `logs/backend.log` and `logs/collector.log`. `stop` terminates only DeusCFO-owned processes.
 
 ## First run and shared league
 
