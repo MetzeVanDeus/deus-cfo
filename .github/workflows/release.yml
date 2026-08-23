@@ -29,7 +29,7 @@ jobs:
         run: pip-audit -r backend/requirements.txt
       - name: Run backend tests
         run: python -m pytest backend
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '20'
           cache: npm
@@ -53,7 +53,7 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '20'
       - name: Build packaged service

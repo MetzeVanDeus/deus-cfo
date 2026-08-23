@@ -1,4 +1,4 @@
-"""Small Windows-friendly controller for the local DeusCFO services."""
+"""Cross-platform controller for the local DeusCFO services."""
 
 from __future__ import annotations
 
@@ -32,7 +32,10 @@ def _production_available():
 
 
 def _services(mode="prod"):
-    npm = shutil.which("npm.cmd") or shutil.which("npm") or "npm.cmd"
+    if os.name == "nt":
+        npm = shutil.which("npm.cmd") or shutil.which("npm") or "npm.cmd"
+    else:
+        npm = shutil.which("npm") or "npm"
     backend_cwd = BUNDLE_ROOT / "backend" if (BUNDLE_ROOT / "backend").is_dir() else BUNDLE_ROOT
     if FROZEN:
         backend_command = [sys.executable, "--service", "backend"]
@@ -134,7 +137,10 @@ def status():
 
 def start(mode="prod"):
     if mode == "prod" and not _production_available():
-        print("Production frontend is missing at frontend/dist. Run the Windows build or use: python deuscfo.py dev")
+        print(
+            "Production frontend is missing. Run: npm ci --prefix frontend && "
+            "npm run build --prefix frontend; or use: python deuscfo.py dev"
+        )
         return False
     total, sqlite = _project_footprint()
     if total - sqlite + SQLITE_LIMIT_BYTES >= PROJECT_LIMIT_BYTES:

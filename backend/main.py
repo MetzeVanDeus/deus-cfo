@@ -1,5 +1,6 @@
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 import httpx
@@ -585,7 +586,7 @@ class CapitalPlanRequest(BaseModel):
     bankroll: capital.Bankroll
     portfolio_id: int | None = None
     preferences: capital.InvestmentPreferences = Field(default_factory=capital.InvestmentPreferences)
-    mode: capital.Mode = "OBSERVE"
+    mode: capital.Mode = "PAPER"
     hours: float = 24
     seed: int = 0
     simulations: int = 2000
@@ -693,6 +694,24 @@ async def create_capital_plan(request: CapitalPlanRequest):
         result["recommendation_id"] = recommendation_id
         result["requested_mode"] = request.mode
         result["mode_downgraded"] = plan.mode != request.mode
+        paper_ideas = []
+        if request.mode in {"PAPER", "AGGRESSIVE-PAPER"}:
+            paper_ideas = await cx_queries.cx_paper_ideas(
+                request.league, hours=max(3, int(request.hours)), limit=5,
+            )
+            if paper_ideas:
+                mapping = await cx_metadata.ensure_currency_mapping()
+                for idea in paper_ideas:
+                    idea["item_name"] = cx_metadata.resolve_name(mapping, idea["item_id"])
+        result["paper_ideas"] = paper_ideas
+        result["evidence_warning"] = (
+            f"Latest direct Currency Exchange snapshot: "
+            f"{max(idea['snapshot_timestamp'] for idea in paper_ideas)} "
+            f"({min(idea['data_age_hours'] for idea in paper_ideas):.1f}h old). "
+            "Mean-reversion gap is not validated EV; confidence remains low until "
+            "direct snapshot backtests clear the normal deployment gates."
+            if paper_ideas else None
+        )
         result["evidence_summary"] = {
             "reconstructed_opportunities": sum(
                 int(item.historical_context.get("reconstructed_sample_size") or 0) > 0
@@ -1380,20 +1399,16 @@ async def data_coverage_category(league: str, category: str):
         return await coverage.cx_coverage(league)
     return await coverage.snapshot_coverage(league, category)
 
+FRONTEND_ASSETS = StaticFiles(directory=FRONTEND_DIST / "assets", check_dir=False)
+app.mount("/assets", FRONTEND_ASSETS, name="frontend-assets")
+
+
 @app.get("/{path:path}", include_in_schema=False)
 async def frontend_app(path: str):
-    """Serve packaged assets without starting Vite; unknown paths fall back to index."""
+    """Serve the packaged app shell; StaticFiles handles built assets safely."""
     if path == "api" or path.startswith("api/"):
         raise HTTPException(status_code=404, detail="not found")
-    root = FRONTEND_DIST.resolve()
-    candidate = (root / path).resolve()
-    try:
-        candidate.relative_to(root)
-    except ValueError:
-        raise HTTPException(status_code=404, detail="not found") from None
-    if candidate.is_file():
-        return FileResponse(candidate)
-    index = root / "index.html"
+    index = FRONTEND_DIST / "index.html"
     if index.is_file():
         return FileResponse(index)
     raise HTTPException(status_code=404, detail="frontend build is unavailable")
