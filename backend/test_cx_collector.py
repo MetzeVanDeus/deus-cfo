@@ -51,9 +51,25 @@ def test_backfill_processes_hours_and_advances(monkeypatch):
     assert progress == [2]
 
 
+def test_backfill_starts_at_requested_recent_window(monkeypatch):
+    progress, _ = _install(monkeypatch, [{"market": 1}], stored=1)
+    fetched = []
+
+    async def fetch(change_id):
+        fetched.append(change_id)
+        return {"next_change_id": change_id + 3600}
+
+    monkeypatch.setattr(cx_collector, "_hour_cursor", lambda hours_ago=0: 10_000 - hours_ago * 3600)
+    monkeypatch.setattr(cx_collector, "fetch_currency_exchange", fetch)
+
+    assert asyncio.run(cx_collector.backfill_currency_exchange(max_hours=1)) == 1
+    assert fetched == [6400]
+    assert progress == [10_000]
+
+
 def test_backfill_stops_at_current_hour(monkeypatch):
     progress, _ = _install(monkeypatch, [{"market": 1}], stored=1, ncid=1)
-    # ncid == change_id (1 == 1) → reached current hour
+    monkeypatch.setattr(cx_collector, "_hour_cursor", lambda _hours_ago=0: 1)
     assert asyncio.run(cx_collector.backfill_currency_exchange(max_hours=5)) == 0
     assert progress == []
 
@@ -73,12 +89,9 @@ def test_poll_stores_cursor_metadata(monkeypatch):
     assert call.get("last_synced_hour") == "hour"
 
 
-def test_backfill_stores_first_change_id_on_fresh_start(monkeypatch):
+def test_backfill_stores_first_change_id(monkeypatch):
     progress, set_calls = _install(monkeypatch, [{"market": 1}], stored=1)
-    # Override get_progress to return None (no saved progress = fresh start)
-    async def _no_progress(_key):
-        return None
-    monkeypatch.setattr(cx_collector.database, "get_cx_progress", _no_progress)
+    monkeypatch.setattr(cx_collector, "_hour_cursor", lambda _hours_ago=0: 1)
     asyncio.run(cx_collector.backfill_currency_exchange(max_hours=1))
     assert progress == [2]
     call = set_calls[0]
