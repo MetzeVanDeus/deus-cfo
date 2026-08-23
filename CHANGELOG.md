@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.4 — 2026-08-23
+
+- Enabled CodeQL analysis for Python, JavaScript/TypeScript, and GitHub Actions, then resolved all three initial path-handling alerts.
+- Routed packaged frontend assets through Starlette's traversal-safe static file handler with regression coverage.
+- Removed the internal release-readiness audit from the published source tree.
+
 ## 0.1.3 — 2026-08-23
 
 - Added explicit packaged Windows download verification and native Windows/Linux source-run instructions.
