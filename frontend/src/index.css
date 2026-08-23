@@ -92,6 +92,14 @@ h3 { font-size:12px; font-weight:600; color:var(--muted); margin:0 0 9px; }
 .paper-grid { display:grid; grid-template-columns:1.2fr .8fr; gap:20px; }
 .equity-sparkline { display:block; width:100%; height:110px; margin:12px 0; background:#100d16; border:1px solid var(--line); }
 .paper-note { color:var(--muted); font-size:11px; line-height:1.4; margin:8px 0; }
+.paper-ideas { margin:10px 0; border-color:color-mix(in srgb,var(--warning) 38%,var(--line)); background:linear-gradient(135deg,rgb(216 173 104 / 7%),transparent 42%),var(--surface); }
+.paper-ideas .panel-title { margin-bottom:4px; }
+.confidence-pill,.evidence-direct { display:inline-block; border:1px solid rgb(216 173 104 / 45%); color:var(--warning); padding:3px 6px; font-size:9px; font-weight:700; letter-spacing:.1em; white-space:nowrap; }
+.paper-ideas-warning { margin:0 0 12px; max-width:850px; color:var(--warning); font-size:11px; line-height:1.45; }
+.paper-ideas-table tbody tr { cursor:default; }
+.paper-ideas-table td { vertical-align:top; }
+.paper-ideas-table .warning { color:var(--warning); }
+.evidence-direct { margin-bottom:3px; border-color:rgb(121 201 154 / 35%); color:var(--positive); }
 .real-form { padding-top:13px; display:grid; grid-template-columns:repeat(5,1fr); gap:10px; }
 .real-form .form-actions { grid-column:1/-1; }
 .journal-section { margin-top:10px; }

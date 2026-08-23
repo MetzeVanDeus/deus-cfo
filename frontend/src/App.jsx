@@ -101,16 +101,20 @@ function ReadinessPanel({ league }) {
     return () => { cancelled = true }
   }, [league])
   const backfill = async () => {
-    setBackfilling(true); setMessage('Backfill started; this can take a few minutes and remains local.')
+    setBackfilling(true); setMessage('Currency Exchange backfill started; this can take a few minutes and remains local.')
     try {
       const { data } = await api.post('/cx/backfill', { max_hours: 168 })
-      setMessage(`Backfill processed ${data?.hours_processed ?? 0} hourly records. Refreshing readiness.`)
-      const response = await api.get('/coverage', { params: { league } }); setCoverage(Array.isArray(response.data) ? response.data : [])
-    } catch (error) { setMessage(error.response?.data?.detail || 'Backfill could not start') }
+      const response = await api.get('/coverage', { params: { league } })
+      const nextCoverage = Array.isArray(response.data) ? response.data : []
+      const exchangeHours = Number(nextCoverage.find((row) => row.category === 'Currency Exchange')?.hours_present || 0)
+      setCoverage(nextCoverage)
+      setMessage(`Currency Exchange backfill processed ${data?.hours_processed ?? 0} hours; ${exchangeHours} exchange hours are stored. Signals use live snapshots collected while DeusCFO runs.`)
+    } catch (error) { setMessage(error.response?.data?.detail || 'Currency Exchange backfill could not start') }
     finally { setBackfilling(false) }
   }
-  const hours = coverage.reduce((max, row) => Math.max(max, Number(row.hours_present || 0)), 0)
-  return <section className="terminal-panel readiness-panel" aria-labelledby="readiness-heading"><div className="panel-title"><h2 id="readiness-heading">Data readiness</h2><span>{loading ? 'CHECKING…' : `${hours} observed hours`}</span></div>{loading ? <p className="muted">Checking stored history for {league}…</p> : <><p className="muted">Current prices arrive on collector cycles. Historical signals and routes need enough observed history; missing history and absent strategy coverage are valid reasons to WAIT.</p><div className="metric-grid"><div className="metric"><span>All stored rows</span><strong>{status?.total_rows?.toLocaleString?.() || '0'}</strong></div><div className="metric"><span>Observed hours</span><strong>{hours}</strong></div><div className="metric"><span>Missing category-hours</span><strong>{coverage.reduce((sum, row) => sum + Number(row.hours_missing || 0), 0)}</strong></div><div className="metric"><span>Last snapshot</span><strong>{status?.last_snapshot_per_league?.[league] ? new Date(status.last_snapshot_per_league[league]).toLocaleString() : 'Not yet'}</strong></div></div><button className="text-button" type="button" disabled={backfilling} onClick={backfill}>{backfilling ? 'BACKFILLING…' : 'BACKFILL CURRENCY EXCHANGE HISTORY'}</button>{message && <p className="paper-note">{message}</p>}</>}</section>
+  const snapshotHours = coverage.filter((row) => row.source === 'poe.ninja').reduce((max, row) => Math.max(max, Number(row.hours_present || 0)), 0)
+  const exchangeHours = Number(coverage.find((row) => row.category === 'Currency Exchange')?.hours_present || 0)
+  return <section className="terminal-panel readiness-panel" aria-labelledby="readiness-heading"><div className="panel-title"><h2 id="readiness-heading">Data readiness</h2><span>{loading ? 'CHECKING…' : `${snapshotHours} snapshot hours · ${exchangeHours} exchange hours`}</span></div>{loading ? <p className="muted">Checking stored history for {league}…</p> : <><p className="muted">Signals use poe.ninja snapshots collected while DeusCFO runs. The backfill below only adds official Currency Exchange history used by exchange-aware routes.</p><div className="metric-grid"><div className="metric"><span>Snapshot rows</span><strong>{status?.total_rows?.toLocaleString?.() || '0'}</strong></div><div className="metric"><span>Signal snapshot hours</span><strong>{snapshotHours}</strong></div><div className="metric"><span>Exchange history hours</span><strong>{exchangeHours}</strong></div><div className="metric"><span>Last snapshot</span><strong>{status?.last_snapshot_per_league?.[league] ? new Date(status.last_snapshot_per_league[league]).toLocaleString() : 'Not yet'}</strong></div></div><button className="text-button" type="button" disabled={backfilling} onClick={backfill}>{backfilling ? 'BACKFILLING…' : 'BACKFILL CURRENCY EXCHANGE HISTORY'}</button>{message && <p className="paper-note">{message}</p>}</>}</section>
 }
 
 export default App

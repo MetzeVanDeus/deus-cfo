@@ -23,14 +23,21 @@ def test_wait_plan_is_appended_and_listed(monkeypatch, tmp_path):
 
     async def no_opportunities(*args):
         return []
+    async def paper_ideas(*args, **kwargs):
+        return [{"item_id": "divine", "confidence": "low", "snapshot_timestamp": "2026-08-13T20:00:00+00:00", "data_age_hours": 234.0}]
     monkeypatch.setattr(main, "_resolve_chaos_per_divine", lambda league: asyncio.sleep(0, result=None))
 
     monkeypatch.setattr(main.opportunity, "get_all_opportunities", no_opportunities)
+    monkeypatch.setattr(main.cx_queries, "cx_paper_ideas", paper_ideas)
+    monkeypatch.setattr(main.cx_metadata, "ensure_currency_mapping", lambda: asyncio.sleep(0, result={}))
+    monkeypatch.setattr(main.cx_metadata, "resolve_name", lambda mapping, item_id: "Divine Orb")
     result = run(main.create_capital_plan(request_for_plan()))
     second = run(main.create_capital_plan(request_for_plan()))
     assert result["recommendation"] == "WAIT"
     assert isinstance(result["recommendation_id"], int)
     assert second["recommendation_id"] != result["recommendation_id"]
+    assert result["paper_ideas"] == [{"item_id": "divine", "item_name": "Divine Orb", "confidence": "low", "snapshot_timestamp": "2026-08-13T20:00:00+00:00", "data_age_hours": 234.0}]
+    assert "not validated EV" in result["evidence_warning"]
     rows = run(main.journal_recommendations())
     assert len(rows) == 2
     assert {row["id"] for row in rows} == {result["recommendation_id"], second["recommendation_id"]}

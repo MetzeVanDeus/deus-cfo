@@ -8,6 +8,7 @@ import database
 import market_data
 import coverage
 import providers
+import cx_queries
 
 
 # ---------------------------------------------------------------------------
@@ -296,6 +297,40 @@ def test_cx_historical_provider_returns_rows(tmp_path, monkeypatch):
         assert hist[0][0] == "2026-08-10T00:00:00+00:00"
 
     asyncio.run(run())
+
+
+def test_cx_paper_ideas_use_direct_hourly_ratios(tmp_path, monkeypatch):
+    _setup_db(tmp_path, monkeypatch)
+    chaos = "Metadata/Items/Currency/CurrencyRerollRare"
+    item = "Metadata/Items/Currency/Test"
+
+    async def run():
+        for timestamp, chaos_ratio in (
+            ("2026-08-23T08:00:00+00:00", 12),
+            ("2026-08-23T09:00:00+00:00", 10),
+            ("2026-08-23T10:00:00+00:00", 8),
+        ):
+            await database.insert_cx_hour([{
+                "league": "L", "market_id": f"{chaos}|{item}",
+                "item_a": chaos, "item_b": item,
+                "volume_a": 1000, "volume_b": 100,
+                "lowest_ratio_a": chaos_ratio, "lowest_ratio_b": 1,
+            }], timestamp)
+        return await cx_queries.cx_paper_ideas("L")
+
+    ideas = asyncio.run(run())
+    assert len(ideas) == 1
+    assert ideas[0]["action"] == "PAPER BUY WATCH"
+    assert ideas[0]["current_price_chaos"] == 8
+    assert ideas[0]["reference_price_chaos"] == 11
+    assert ideas[0]["mean_reversion_gap_percent"] == 37.5
+    assert ideas[0]["hourly_samples"] == 3
+    assert ideas[0]["latest_volume"] == 100
+    assert ideas[0]["liquidity"] == "medium"
+    assert ideas[0]["confidence"] == "low"
+    assert ideas[0]["snapshot_timestamp"] == "2026-08-23T10:00:00+00:00"
+    assert ideas[0]["data_age_hours"] >= 0
+    assert ideas[0]["evidence_source"] == "DIRECT_OBSERVATION"
 
 
 def test_cx_historical_provider_empty_for_non_currency_category(tmp_path, monkeypatch):

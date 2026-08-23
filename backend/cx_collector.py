@@ -22,6 +22,12 @@ POE_NINJA_LEAGUES = "https://poe.ninja/poe1/api/economy/leagues"
 REQUEST_DELAY = 0.5  # seconds between CDN fetches
 
 
+def _hour_cursor(hours_ago: int = 0) -> int:
+    """Return an exact UTC-hour cursor accepted by the CDN."""
+    current = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
+    return current - current % 3600 - hours_ago * 3600
+
+
 def _resolve_league(league: str, wanted_leagues: set[str]) -> str | None:
     """Map a CX league name onto a poe.ninja league (case-insensitive)."""
     if not isinstance(league, str):
@@ -130,17 +136,12 @@ async def store_cx_hour(data: dict, wanted_leagues: set[str]) -> int:
 
 
 async def backfill_currency_exchange(max_hours: int = 168) -> int:
-    """Follow the change_id chain from saved progress (or the beginning).
+    """Fetch the most recent hourly currency-exchange window.
 
     Returns the number of hours processed.
     """
     wanted = await _fetch_leagues()
-    try:
-        last = await database.get_cx_progress("default")
-    except Exception:
-        log.exception("cx backfill: progress read failed")
-        return 0
-    change_id = last
+    change_id = _hour_cursor(max_hours)
     first_change_id = None
     first_hour = None
     hours = 0
@@ -163,7 +164,7 @@ async def backfill_currency_exchange(max_hours: int = 168) -> int:
                 log.error("cx backfill: malformed hour at change_id=%s", change_id)
                 break
             stored = await database.insert_cx_hour(records, ts) if records else 0
-            if last is None and first_change_id is None:
+            if first_change_id is None:
                 first_change_id = ncid
                 first_hour = ts
             await database.set_cx_progress(
@@ -184,15 +185,20 @@ async def backfill_currency_exchange(max_hours: int = 168) -> int:
 
 
 async def poll_latest_cx() -> int:
-    """Fetch the latest hour and store it. Returns entries stored (0 if up to date)."""
+    """Fetch the latest completed currency-exchange hour."""
     wanted = await _fetch_leagues()
     try:
         last = await database.get_cx_progress("default")
     except Exception:
         log.exception("cx poll: progress read failed")
         return 0
+    current_hour = _hour_cursor()
+    if last is not None and last >= current_hour:
+        log.info("cx poll: already up to date at %s", last)
+        return 0
+    change_id = last if last is not None else current_hour - 3600
     try:
-        data = await fetch_currency_exchange(last)
+        data = await fetch_currency_exchange(change_id)
     except Exception:
         log.exception("cx poll: fetch failed")
         return 0
@@ -200,7 +206,7 @@ async def poll_latest_cx() -> int:
     if ncid is None:
         log.error("cx poll: malformed response")
         return 0
-    if last is not None and ncid == last:
+    if ncid == change_id:
         log.info("cx poll: already up to date at %s", ncid)
         return 0
     try:
