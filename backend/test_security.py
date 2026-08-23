@@ -9,7 +9,7 @@ def client():
     return TestClient(main.app)
 
 
-def local_headers(origin="http://127.0.0.1:3000"):
+def local_headers(origin: str | None = "http://127.0.0.1:3000"):
     headers = {"host": "127.0.0.1:8000"}
     if origin is not None:
         headers["origin"] = origin
@@ -108,3 +108,20 @@ def test_config_rejects_unknown_league(monkeypatch, tmp_path, client):
         headers={**local_headers(), "X-DeusCFO-Token": session},
     )
     assert response.status_code == 400
+
+
+def test_packaged_frontend_confines_assets(monkeypatch, tmp_path, client):
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    (assets / "app.js").write_text("safe", encoding="utf-8")
+    (tmp_path / "secret.txt").write_text("secret", encoding="utf-8")
+    (tmp_path / "index.html").write_text("app shell", encoding="utf-8")
+    monkeypatch.setattr(main, "FRONTEND_DIST", tmp_path)
+    monkeypatch.setattr(main.FRONTEND_ASSETS, "directory", str(assets))
+    monkeypatch.setattr(main.FRONTEND_ASSETS, "all_directories", [str(assets)])
+    monkeypatch.setattr(main.FRONTEND_ASSETS, "config_checked", False)
+
+    headers = local_headers(None)
+    assert client.get("/assets/app.js", headers=headers).text == "safe"
+    assert client.get("/assets/%2e%2e/secret.txt", headers=headers).status_code == 404
+    assert client.get("/dashboard", headers=headers).text == "app shell"
