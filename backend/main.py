@@ -1,5 +1,6 @@
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 import httpx
@@ -1398,20 +1399,16 @@ async def data_coverage_category(league: str, category: str):
         return await coverage.cx_coverage(league)
     return await coverage.snapshot_coverage(league, category)
 
+FRONTEND_ASSETS = StaticFiles(directory=FRONTEND_DIST / "assets", check_dir=False)
+app.mount("/assets", FRONTEND_ASSETS, name="frontend-assets")
+
+
 @app.get("/{path:path}", include_in_schema=False)
 async def frontend_app(path: str):
-    """Serve packaged assets without starting Vite; unknown paths fall back to index."""
+    """Serve the packaged app shell; StaticFiles handles built assets safely."""
     if path == "api" or path.startswith("api/"):
         raise HTTPException(status_code=404, detail="not found")
-    root = FRONTEND_DIST.resolve()
-    candidate = (root / path).resolve()
-    try:
-        candidate.relative_to(root)
-    except ValueError:
-        raise HTTPException(status_code=404, detail="not found") from None
-    if candidate.is_file():
-        return FileResponse(candidate)
-    index = root / "index.html"
+    index = FRONTEND_DIST / "index.html"
     if index.is_file():
         return FileResponse(index)
     raise HTTPException(status_code=404, detail="frontend build is unavailable")
