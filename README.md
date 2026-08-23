@@ -47,7 +47,7 @@ The launcher starts only the loopback backend and collector; FastAPI serves the 
 
 On first run, choose a live league in **Shared market context** and save it. The UI and collector read the same ignored local `deuscfo.config.json` (`{ "league": "<id>" }`). If a configured league expires, DeusCFO stops silently drifting: it marks migration required and asks you to choose a current league.
 
-The collector first gathers current poe.ninja snapshots. Historical views become useful as observations accumulate. The **Data readiness** panel shows stored rows, observed hours, missing intervals, and the last snapshot; it also starts bounded Currency Exchange backfill. A first run can therefore show no signals or routes for a while. `WAIT` is a valid result when history, liquidity, patch evidence, or strategy coverage is insufficient. No demo data is inserted.
+The collector first gathers current poe.ninja snapshots. Historical views become useful as observations accumulate. The **Data readiness** panel shows stored rows, observed hours, missing intervals, and the last snapshot; it also starts bounded Currency Exchange backfill. The CFO defaults to **PAPER** and may show clearly labeled, low-confidence Currency Exchange mean-reversion watches from direct hourly quotes; validated capital positions remain behind the existing evidence gates. A first run can therefore show no signals or routes for a while. `WAIT` is a valid result when history, liquidity, patch evidence, or strategy coverage is insufficient. No demo data is inserted.
 
 ## What it helps with
 
