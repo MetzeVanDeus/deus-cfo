@@ -105,7 +105,6 @@ async def detect_regime(league: str, category: str, item_id: str, hours: float =
     SHARP_DROP = -10.0   # % drop threshold for crashing
     SHARP_RISE = 10.0    # % rise threshold for pumping
     HIGH_VOL_MULT = 2.0  # volume multiplier for "high volume"
-    VOLATILE = 8.0       # volatility_pct threshold for "high volatility"
 
     # Supply Shock: price down + volume up sharply
     if price_change_pct < -SHARP_DROP and volume_change >= HIGH_VOL_MULT:

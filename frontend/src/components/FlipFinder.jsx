@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect } from 'react'
 import { api } from '../lib/helpers'
 
-export function FlipFinder({ leagues, categories, selectedLeague, setSelectedLeague }) {
+export function FlipFinder({ categories, selectedLeague }) {
   const [selectedCategory, setSelectedCategory] = useState('Currency')
   const [budgetCurrency, setBudgetCurrency] = useState('divine')
   const [budgetAmount, setBudgetAmount] = useState('10')
@@ -52,10 +52,8 @@ export function FlipFinder({ leagues, categories, selectedLeague, setSelectedLea
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
           <div>
-            <label className="block text-sm font-medium text-dracula-comment mb-2">League</label>
-            <select value={selectedLeague} onChange={(e) => setSelectedLeague(e.target.value)} className="input w-full">
-              {leagues.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
-            </select>
+            <label className="block text-sm font-medium text-dracula-comment mb-2">Shared league</label>
+            <div className="input w-full" aria-label="Shared league">{selectedLeague || 'Choose shared league above'}</div>
           </div>
 
           <div>

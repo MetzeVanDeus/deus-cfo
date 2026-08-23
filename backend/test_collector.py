@@ -4,6 +4,14 @@ import pytest
 import collector
 
 
+def test_configured_league_requires_explicit_value(tmp_path, monkeypatch):
+    monkeypatch.setattr(collector, "CONFIG_PATH", tmp_path / "missing.json")
+    monkeypatch.delenv("DEUSCFO_LEAGUE", raising=False)
+    assert collector.configured_league() == ""
+    monkeypatch.setenv("DEUSCFO_LEAGUE", "Settlers")
+    assert collector.configured_league() == "Settlers"
+
+
 def test_collector_uses_api_type_keys_and_blocks_stash_history(monkeypatch):
     requests = []
     inserted = []
@@ -163,3 +171,37 @@ def test_category_sweep_stops_before_storage_headroom_is_exhausted(monkeypatch):
 
     assert set(results.values()) == {0}
     assert calls == ["prune"]
+
+
+
+def test_snapshot_skips_malformed_rows_without_losing_valid_rows(monkeypatch):
+    inserted = []
+
+    class Response:
+        status_code = 200
+
+        def json(self):
+            return {"lines": [None, {"id": 7, "primaryValue": "bad"}, {
+                "id": "chaos", "primaryValue": 5, "volumePrimaryValue": 3,
+            }]}
+
+    class Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return None
+
+        async def get(self, _url, params):
+            assert params["type"] == "Currency"
+            return Response()
+
+    async def insert(records, timestamp=None):
+        inserted.extend(records)
+        return len(records)
+
+    monkeypatch.setattr(collector.httpx, "AsyncClient", lambda **_: Client())
+    monkeypatch.setattr(collector.database, "insert_snapshots", insert)
+
+    assert asyncio.run(collector.collect_snapshot("Allflame", "Currency")) == 1
+    assert inserted[0]["item_id"] == "chaos"

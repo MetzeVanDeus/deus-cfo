@@ -2,10 +2,12 @@
 
 import argparse
 import asyncio
+import json
 import logging
 import math
 import os
 from datetime import datetime, timezone
+from pathlib import Path
 import httpx
 
 import cx_collector
@@ -16,6 +18,15 @@ log = logging.getLogger("deuscfo.collector")
 POE_NINJA_BASE = "https://poe.ninja"
 EXCHANGE_URL = f"{POE_NINJA_BASE}/poe1/api/economy/exchange/current/overview"
 STASH_URL = f"{POE_NINJA_BASE}/poe1/api/economy/stash/current/item/overview"
+
+TRADE_API_BASE = "https://www.pathofexile.com/api/trade"
+# These are trade-site endpoints, not entries in GGG's official Developer API reference.
+TRADE_DEPTH_ENV = "DEUSCFO_TRADE_DEPTH"
+TRADE_DEPTH_LIMIT_ENV = "DEUSCFO_TRADE_DEPTH_LIMIT"
+TRADE_REQUEST_DELAY_ENV = "DEUSCFO_TRADE_REQUEST_DELAY"
+TRADE_USER_AGENT_ENV = "DEUSCFO_TRADE_USER_AGENT"
+TRADE_FEE_ENV = "DEUSCFO_TRADE_FEE_RATE"
+CONFIG_PATH = Path(os.environ["DEUSCFO_CONFIG_PATH"]) if os.environ.get("DEUSCFO_CONFIG_PATH") else Path(__file__).resolve().parent.parent / "deuscfo.config.json"
 
 # poe.ninja 'type' param per category (same mapping as main.py)
 _EXCHANGE_TYPES = {
@@ -38,22 +49,39 @@ _COLLECTION_TYPES = {
     "UniqueAccessory": "UniqueAccessory",
 }
 
-TRADE_API_BASE = "https://www.pathofexile.com/api/trade"
-TRADE_DEPTH_ENV = "DEUSCFO_TRADE_DEPTH"
-TRADE_DEPTH_LIMIT_ENV = "DEUSCFO_TRADE_DEPTH_LIMIT"
-TRADE_USER_AGENT_ENV = "DEUSCFO_TRADE_USER_AGENT"
-TRADE_FEE_ENV = "DEUSCFO_TRADE_FEE_RATE"
-
 
 def trade_depth_enabled() -> bool:
     return os.environ.get(TRADE_DEPTH_ENV, "").casefold() in {"1", "true", "yes", "on"}
 
 
-def _trade_limit() -> int:
+def _trade_limit(value: int | None = None) -> int:
+    raw = value if value is not None else os.environ.get(TRADE_DEPTH_LIMIT_ENV, "20")
     try:
-        return max(1, min(50, int(os.environ.get(TRADE_DEPTH_LIMIT_ENV, "20"))))
-    except ValueError:
+        return max(1, min(50, int(raw)))
+    except (TypeError, ValueError):
         return 20
+
+
+def _trade_delay() -> float:
+    try:
+        value = float(os.environ.get(TRADE_REQUEST_DELAY_ENV, "0.25"))
+    except ValueError:
+        return 0.25
+    return value if math.isfinite(value) and 0 <= value <= 10 else 0.25
+
+
+def configured_league(override: str | None = None) -> str:
+    """Read the shared league each cycle unless the caller supplied an override."""
+    if override:
+        return override
+    try:
+        with CONFIG_PATH.open(encoding="utf-8") as handle:
+            value = json.load(handle).get("league")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    except (OSError, json.JSONDecodeError, AttributeError):
+        pass
+    return os.environ.get("DEUSCFO_LEAGUE", "").strip()
 
 
 def _trade_fee() -> float:
@@ -90,18 +118,32 @@ def stash_item_id(line: dict) -> str:
     return str(line.get("detailsId") or line.get("id", ""))
 
 
-def _normalize(line: dict, league: str, category: str, is_exchange: bool) -> dict:
-    """Map a poe.ninja line into a direct observation, preserving valid depth only."""
+def _finite_number(value, default=0):
+    """Return a finite numeric API value, or None when malformed."""
+    if value is None:
+        return default
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return value if math.isfinite(float(value)) else None
+
+
+def _normalize(line: dict, league: str, category: str, is_exchange: bool) -> dict | None:
+    """Map one API line into a direct observation, rejecting malformed rows."""
+    if not isinstance(line, dict):
+        return None
     if is_exchange:
         item_id = line.get("id", "")
+        item_name = _format_slug(item_id) if isinstance(item_id, str) else ""
+        price = _finite_number(line.get("primaryValue"), 0)
+        volume = _finite_number(line.get("volumePrimaryValue"), 0)
         record = {
             "league": league,
             "category": category,
             "item_id": item_id,
-            "item_name": _format_slug(item_id),
+            "item_name": item_name,
             "variant": "",
-            "price_chaos": line.get("primaryValue", 0) or 0,
-            "volume": line.get("volumePrimaryValue", 0) or 0,
+            "price_chaos": price,
+            "volume": volume,
             "listing_count": 0,
             "icon": "",
             "source": "poe.ninja",
@@ -109,24 +151,48 @@ def _normalize(line: dict, league: str, category: str, is_exchange: bool) -> dic
             "confidence_grade": "B",
         }
     else:
+        item_id = stash_item_id(line)
+        price = _finite_number(line.get("chaosValue"), 0)
+        volume = _finite_number(line.get("listingCount") or line.get("count"), 0)
+        listing_count = _finite_number(line.get("listingCount"), 0)
         record = {
             "league": league,
             "category": category,
-            "item_id": stash_item_id(line),
-            "item_name": line.get("name", "Unknown"),
-            "variant": line.get("variant", "") or "",
-            "price_chaos": line.get("chaosValue", 0) or 0,
-            "volume": line.get("listingCount", 0) or line.get("count", 0) or 0,
-            "listing_count": line.get("listingCount", 0) or 0,
-            "icon": line.get("icon", "") or "",
+            "item_id": item_id,
+            "item_name": line.get("name") if isinstance(line.get("name"), str) else "Unknown",
+            "variant": line.get("variant") if isinstance(line.get("variant"), str) else "",
+            "price_chaos": price,
+            "volume": volume,
+            "listing_count": listing_count,
+            "icon": line.get("icon") if isinstance(line.get("icon"), str) else "",
             "source": "poe.ninja",
             "observation_type": "DIRECT_OBSERVATION",
             "confidence_grade": "B",
         }
+    if (
+        not isinstance(item_id, str)
+        or not item_id
+        or price is None
+        or volume is None
+        or record["listing_count"] is None
+    ):
+        return None
     quote = database.validate_execution_quote(line.get("execution_quote"))
     if quote is not None:
         record["execution_quote"] = quote
     return record
+
+
+def _snapshot_records(data, league: str, category: str, is_exchange: bool) -> list[dict] | None:
+    """Normalize a poe.ninja payload; None means the envelope was malformed."""
+    if not isinstance(data, dict) or not isinstance(data.get("lines"), list):
+        return None
+    records = []
+    for line in data["lines"]:
+        record = _normalize(line, league, category, is_exchange)
+        if record is not None and record["price_chaos"] > 0:
+            records.append(record)
+    return records
 
 def _trade_price(entry: dict, chaos_per_divine: float) -> tuple[float, float] | None:
     listing = entry.get("listing") if isinstance(entry, dict) else None
@@ -173,11 +239,10 @@ def _trade_quote(entries: list[dict], *, side: str, chaos_per_divine: float) -> 
 
 
 class TradeDepthAdapter:
-    """Opt-in adapter for exact item depth from the public trade website API."""
+    """Opt-in, bounded adapter for the trade website (not an official API claim)."""
 
     def __init__(self, *, limit: int | None = None) -> None:
-        self.limit = limit or _trade_limit()
-
+        self.limit = _trade_limit(limit)
     async def quote(
         self,
         client: httpx.AsyncClient,
@@ -189,34 +254,39 @@ class TradeDepthAdapter:
     ) -> dict | None:
         if side != "buy":
             return None
-        response = await client.post(
-            f"{TRADE_API_BASE}/search/{league}",
-            json={
-                "query": {"status": {"option": "online"}, "name": item_name},
-                "sort": {"price": "asc"},
-            },
-        )
-        if response.status_code != 200:
+        try:
+            response = await client.post(
+                f"{TRADE_API_BASE}/search/{league}",
+                json={
+                    "query": {"status": {"option": "online"}, "name": item_name},
+                    "sort": {"price": "asc"},
+                },
+            )
+            if response.status_code != 200:
+                return None
+            search = response.json()
+            search_id = search.get("id") if isinstance(search, dict) else None
+            listing_ids = search.get("result", []) if isinstance(search, dict) else []
+            if not isinstance(search_id, str) or not isinstance(listing_ids, list):
+                return None
+            listing_ids = [item for item in listing_ids[:self.limit] if isinstance(item, str) and item]
+            if not listing_ids:
+                return None
+            response = await client.get(
+                f"{TRADE_API_BASE}/fetch/{','.join(listing_ids)}",
+                params={"query": search_id},
+            )
+            if response.status_code != 200:
+                return None
+            payload = response.json()
+            entries = payload.get("result", []) if isinstance(payload, dict) else []
+            if not isinstance(entries, list):
+                return None
+            return _trade_quote(entries, side="buy", chaos_per_divine=chaos_per_divine)
+        except Exception:
+            # Trade-site outages and malformed payloads must never become evidence.
+            log.warning("trade depth request failed for %s", item_name, exc_info=True)
             return None
-        search = response.json()
-        search_id = search.get("id") if isinstance(search, dict) else None
-        listing_ids = search.get("result", []) if isinstance(search, dict) else []
-        if not isinstance(search_id, str) or not isinstance(listing_ids, list):
-            return None
-        listing_ids = [item for item in listing_ids[:self.limit] if isinstance(item, str) and item]
-        if not listing_ids:
-            return None
-        response = await client.get(
-            f"{TRADE_API_BASE}/fetch/{','.join(listing_ids)}",
-            params={"query": search_id},
-        )
-        if response.status_code != 200:
-            return None
-        payload = response.json()
-        entries = payload.get("result", []) if isinstance(payload, dict) else []
-        if not isinstance(entries, list):
-            return None
-        return _trade_quote(entries, side="buy", chaos_per_divine=chaos_per_divine)
 
     async def collect(
         self,
@@ -225,13 +295,12 @@ class TradeDepthAdapter:
         *,
         chaos_per_divine: float = 0.0,
     ) -> dict[str, dict]:
-        items = {
-            recipe["card_market_key"]: recipe["card"]
-            for recipe in recipes
-        }
+        items = {recipe["card_market_key"]: recipe["card"] for recipe in recipes}
         quotes = {}
         async with httpx.AsyncClient(timeout=20, headers=_trade_headers()) as client:
-            for key, name in items.items():
+            for index, (key, name) in enumerate(items.items()):
+                if index:
+                    await asyncio.sleep(_trade_delay())
                 quote = await self.quote(
                     client, league, name, side="buy", chaos_per_divine=chaos_per_divine
                 )
@@ -328,12 +397,17 @@ async def _collect_normalized(league: str, category: str) -> list[dict]:
         resp = await client.get(url, params={"league": league, "type": api_type})
         if resp.status_code != 200:
             return []
-        data = resp.json()
-    records = [
-        _normalize(line, league, category, is_exchange)
-        for line in data.get("lines", [])
-    ]
-    return [r for r in records if r["price_chaos"] > 0]
+        try:
+            data = resp.json()
+        except (TypeError, ValueError):
+            log.error("collect %s/%s: invalid JSON response", league, category)
+            return []
+    records = _snapshot_records(data, league, category, is_exchange)
+    if records is None:
+        log.error("collect %s/%s: malformed response payload", league, category)
+        return []
+    return records
+
 
 
 async def collect_snapshot(league: str, category: str, exchange_types=None,
@@ -351,13 +425,16 @@ async def collect_snapshot(league: str, category: str, exchange_types=None,
         if resp.status_code != 200:
             log.error("collect %s/%s: HTTP %s", league, category, resp.status_code)
             return 0
-        data = resp.json()
+        try:
+            data = resp.json()
+        except (TypeError, ValueError):
+            log.error("collect %s/%s: invalid JSON response", league, category)
+            return 0
     timestamp = timestamp or database.now_iso()
-    records = [
-        _normalize(line, league, category, is_exchange)
-        for line in data.get("lines", [])
-    ]
-    records = [r for r in records if r["price_chaos"] > 0]
+    records = _snapshot_records(data, league, category, is_exchange)
+    if records is None:
+        log.error("collect %s/%s: malformed response payload", league, category)
+        return 0
     stored = await database.insert_snapshots(records, timestamp)
     log.info("Stored %d snapshots for %s / %s", stored, league, category)
     return stored
@@ -400,14 +477,21 @@ async def collect_all_categories(league: str) -> dict[str, int]:
     return results
 
 
-async def run_collector(league: str, interval: int = 1800, once: bool = False) -> None:
-    """Own the SQLite write path independently from the analytical API."""
+async def run_collector(league: str | None = None, interval: int = 1800, once: bool = False) -> None:
+    """Collect using shared config each cycle, unless an explicit league overrides it."""
     if interval < 1:
         raise ValueError("interval must be positive")
     while True:
-        results = await collect_all_categories(league)
+        selected_league = configured_league(league)
+        if not selected_league:
+            log.warning("collector waiting for an explicit league configuration")
+            if once:
+                return
+            await asyncio.sleep(min(interval, 5))
+            continue
+        results = await collect_all_categories(selected_league)
         cx_stored = await cx_collector.poll_latest_cx()
-        log.info("collection cycle complete for %s: %s; cx=%d", league, results, cx_stored)
+        log.info("collection cycle complete for %s: %s; cx=%d", selected_league, results, cx_stored)
         if once:
             return
         await asyncio.sleep(interval)
@@ -417,8 +501,8 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the DeusCFO historical collector.")
     parser.add_argument(
         "--league",
-        default=os.environ.get("DEUSCFO_LEAGUE", "Allflame"),
-        help="poe.ninja league for market snapshots (default: DEUSCFO_LEAGUE or Allflame)",
+        default=None,
+        help="explicit poe.ninja league override; otherwise use deuscfo.config.json",
     )
     parser.add_argument(
         "--interval",

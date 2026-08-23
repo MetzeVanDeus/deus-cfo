@@ -8,14 +8,21 @@ from datetime import datetime, timedelta, timezone
 
 import aiosqlite
 
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "deuscfo.db")
+_BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
+_PROJECT_ROOT = os.path.dirname(_BACKEND_DIR)
+_DEFAULT_DB_PATH = os.path.join(_BACKEND_DIR, "deuscfo.db")
+_DATA_DIR = os.environ.get("DEUSCFO_DATA_DIR", "").strip()
+if _DATA_DIR:
+    _DATA_DIR = os.path.abspath(_DATA_DIR)
+    os.makedirs(_DATA_DIR, exist_ok=True)
+DB_PATH = os.path.join(_DATA_DIR, "deuscfo.db") if _DATA_DIR else _DEFAULT_DB_PATH
 _schema_lock = asyncio.Lock()
 _schema_path: str | None = None
 MAX_DATABASE_BYTES = 600 * 1024 * 1024
 MAX_WAL_BYTES = 32 * 1024 * 1024
 SNAPSHOT_RETENTION_DAYS = 14
 CX_RETENTION_DAYS = SNAPSHOT_RETENTION_DAYS
-PROJECT_ROOT = os.path.dirname(os.path.dirname(DB_PATH))
+PROJECT_ROOT = _PROJECT_ROOT
 PROJECT_LIMIT_BYTES = 1024 * 1024 * 1024
 COLLECTION_STOP_BYTES = 850 * 1024 * 1024
 
@@ -523,7 +530,20 @@ def project_footprint() -> int:
 
 
 def collection_allowed() -> bool:
-    return project_footprint() < COLLECTION_STOP_BYTES
+    footprint = project_footprint()
+    try:
+        db_path = os.path.abspath(DB_PATH)
+        project_root = os.path.abspath(PROJECT_ROOT)
+        outside_project = os.path.commonpath((db_path, project_root)) != project_root
+    except ValueError:
+        # Different Windows drives are still a resolvable external database path.
+        outside_project = True
+    except OSError:
+        # An unresolvable path cannot safely bypass the collection stop guard.
+        return False
+    if outside_project:
+        footprint += storage_footprint()["total"]
+    return footprint < COLLECTION_STOP_BYTES
 
 
 async def _dedupe_cx_history(db: aiosqlite.Connection) -> None:
@@ -753,7 +773,11 @@ async def prune_market_data(
             )
         await db.commit()
         await db.execute("PRAGMA incremental_vacuum(2000)")
-        await db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        try:
+            await db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        except aiosqlite.OperationalError as exc:
+            if "locked" not in str(exc).casefold():
+                raise
         return {
             "unsupported_snapshots": max(0, category_cursor.rowcount),
             "expired_snapshots": max(0, age_cursor.rowcount),

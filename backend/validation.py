@@ -118,7 +118,7 @@ def _regime(history: list[dict]) -> dict:
                "volume_change": round(volume_change, 2), "trend": trend,
                "trend_acceleration": acceleration}
 
-    sharp_drop, sharp_rise, high_volume, volatile = -10.0, 10.0, 2.0, 8.0
+    sharp_drop, sharp_rise, high_volume = -10.0, 10.0, 2.0
     if price_change_pct < -sharp_drop and volume_change >= high_volume:
         regime, confidence = "Supply Shock", min(0.95, 0.5 + abs(price_change_pct) / 40 + (volume_change - 1) / 5)
     elif price_change_pct > sharp_rise and volume_change >= high_volume:

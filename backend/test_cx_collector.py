@@ -85,3 +85,45 @@ def test_backfill_stores_first_change_id_on_fresh_start(monkeypatch):
     assert call.get("first_change_id") == 2
     assert call.get("first_available_hour") == "hour"
     assert call.get("last_synced_hour") == "hour"
+
+
+def test_parse_hour_skips_malformed_markets_and_preserves_valid_data():
+    data = {
+        "next_change_id": 2,
+        "markets": [None, {
+            "league": "Allflame",
+            "market_id": "chaos|divine",
+            "market_pair": ["chaos", "divine"],
+            "volume_traded": {"chaos": 4, "divine": 2},
+        }],
+    }
+
+    timestamp, records = cx_collector._parse_hour(data, {"Allflame"})
+
+    assert timestamp
+    assert len(records) == 1
+    assert records[0]["volume_a"] == 4
+
+
+def test_poll_does_not_advance_on_malformed_payload(monkeypatch):
+    progress = []
+
+    async def leagues():
+        return {"Allflame"}
+
+    async def get_progress(_key):
+        return 1
+
+    async def fetch(_change_id):
+        return {"next_change_id": "bad", "markets": []}
+
+    async def set_progress(*_args, **_kwargs):
+        progress.append(True)
+
+    monkeypatch.setattr(cx_collector, "_fetch_leagues", leagues)
+    monkeypatch.setattr(cx_collector.database, "get_cx_progress", get_progress)
+    monkeypatch.setattr(cx_collector, "fetch_currency_exchange", fetch)
+    monkeypatch.setattr(cx_collector.database, "set_cx_progress", set_progress)
+
+    assert asyncio.run(cx_collector.poll_latest_cx()) == 0
+    assert progress == []

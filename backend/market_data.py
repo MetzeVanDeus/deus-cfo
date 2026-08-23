@@ -1,6 +1,5 @@
 """Historical market data queries over the snapshots table."""
 
-import math
 import statistics
 from datetime import datetime, timedelta, timezone
 

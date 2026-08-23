@@ -2,15 +2,16 @@
 
 The Currency Exchange API identifies currencies by base item metadata IDs
 (e.g. "Metadata/Items/Currency/CurrencyRerollRare" = Chaos Orb), while the
-trade API uses short IDs ("chaos").  This module builds a mapping from:
+trade site uses short IDs ("chaos").  This module builds a mapping from:
 
-1. A hardcoded map of the most common currencies (researched from the
-   official Currency Exchange API docs and poe.ninja).
-2. An auto-derived map from GGG's /api/trade/data/static: the entry's
-   image URL embeds the base64-encoded 2D item path, which we transform
-   back into the metadata ID.  (~24 core currencies resolve this way.)
+1. A hardcoded map of the most common currencies, researched against the
+   official Currency Exchange API and poe.ninja.
+2. An optional map from the supported trade-site ``/api/trade/data/static``
+   endpoint.  This endpoint is supported by the project owner but is not
+   listed as an official GGG Developer API resource.
 3. A slug-fallback: metadata IDs (or any unknown ID) get a human-readable
    display name via the shared slug formatter.
+
 """
 
 import base64
@@ -20,7 +21,7 @@ import re
 
 import httpx
 
-STATIC_URL = "https://www.pathofexile.com/api/trade/data/static"
+STATIC_URL = "https://www.pathofexile.com/api/trade/data/static"  # supported trade-site endpoint; not official Developer API
 
 # (metadata ID, display name) for the most common currencies, per research.
 HARDCODED = [
@@ -96,6 +97,7 @@ def _decode_image_metadata(image_url: str) -> str | None:
         if meta:
             return "Metadata/Items/" + meta.replace("2DItems/", "", 1)
     except Exception:
+        # Optional third-party image metadata is never allowed to break CX reads.
         return None
     return None
 
@@ -105,7 +107,15 @@ async def _fetch_static_entries() -> dict:
     out = {}
     try:
         async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
-            resp = await client.get(STATIC_URL)
+            resp = await client.get(
+                STATIC_URL,
+                headers={
+                    "User-Agent": os.environ.get(
+                        "DEUSCFO_TRADE_USER_AGENT",
+                        "DeusCFO/3.0 (+https://github.com/MetzeVanDeus/deus-cfo)",
+                    )
+                },
+            )
             if resp.status_code == 200:
                 for section in resp.json().get("result", []):
                     for e in section.get("entries", []):
@@ -117,30 +127,11 @@ async def _fetch_static_entries() -> dict:
                                 "icon": e.get("image", ""),
                             }
     except Exception:
-        pass  # caller falls back to research snapshot / hardcoded
+        # The live trade-site endpoint is optional; use hardcoded/slug fallbacks.
+        pass
     return out
 
 
-def _load_research_static_entries() -> dict:
-    """Offline fallback: reuse the research snapshot of the same endpoint."""
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                        "api_research", "trade_data_static.json")
-    try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-    except (OSError, json.JSONDecodeError):
-        return {}
-    out = {}
-    for section in data.get("result", []):
-        for e in section.get("entries", []):
-            meta = _decode_image_metadata(e.get("image", ""))
-            if meta:
-                out[meta] = {
-                    "id": e.get("id", ""),
-                    "name": e.get("text", ""),
-                    "icon": e.get("image", ""),
-                }
-    return out
 
 
 async def build_currency_mapping() -> dict:
@@ -151,12 +142,8 @@ async def build_currency_mapping() -> dict:
     succeeds; otherwise "id" is derived from the metadata path tail and the
     icon is empty.  The result is cached to cx_currency_map.json.
     """
-    # populate from static data, overriding hardcoded entries
-    static_entries = {}
-    for source in (await _fetch_static_entries(), _load_research_static_entries()):
-        if source:
-            static_entries = source
-            break
+    # Live static metadata is optional; hardcoded and slug fallbacks remain valid.
+    static_entries = await _fetch_static_entries()
 
     mapping = {}
     for meta, name in HARDCODED:
@@ -165,19 +152,25 @@ async def build_currency_mapping() -> dict:
         mapping[meta] = entry
     return mapping
 
+def _mapping_path() -> str:
+    data_dir = os.environ.get("DEUSCFO_DATA_DIR", "").strip()
+    if data_dir:
+        return os.path.join(os.path.abspath(data_dir), "cx_currency_map.json")
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "cx_currency_map.json")
+
 
 def load_currency_mapping() -> dict:
     """Load the cached mapping JSON (empty dict if absent)."""
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cx_currency_map.json")
     try:
-        with open(path, encoding="utf-8") as f:
+        with open(_mapping_path(), encoding="utf-8") as f:
             return _normalize_mapping(json.load(f))
     except (OSError, json.JSONDecodeError):
         return {}
 
 
 def save_currency_mapping(mapping: dict) -> None:
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cx_currency_map.json")
+    path = _mapping_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(mapping, f, ensure_ascii=False, indent=2)
 

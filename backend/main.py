@@ -1,12 +1,18 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 import httpx
 import math
-import asyncio
 import json
 import logging
 import os
+import secrets
+import hmac
+import tempfile
+import sys
+from pathlib import Path
+from urllib.parse import urlsplit
 import database
 import collector
 import market_data
@@ -28,12 +34,111 @@ log = logging.getLogger("deuscfo.main")
 
 app = FastAPI(title="DeusCFO")
 
+ALLOWED_ORIGINS = frozenset({"http://127.0.0.1:3000", "http://localhost:3000"})
+LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+SESSION_TOKEN = secrets.token_urlsafe(32)
+CONFIG_PATH = Path(os.environ["DEUSCFO_CONFIG_PATH"]) if os.environ.get("DEUSCFO_CONFIG_PATH") else Path(__file__).resolve().parent.parent / "deuscfo.config.json"
+FRONTEND_DIST = Path(os.environ["DEUSCFO_FRONTEND_DIST"]) if os.environ.get("DEUSCFO_FRONTEND_DIST") else Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent)) / "frontend" / "dist"
+
+
+def _host_parts(request: Request) -> tuple[str, int | None] | None:
+    """Parse Host without trusting arbitrary forwarded-host headers."""
+    raw = request.headers.get("host", "")
+    try:
+        parsed = urlsplit(f"//{raw}")
+        hostname = (parsed.hostname or "").casefold()
+        port = parsed.port
+    except ValueError:
+        return None
+    if hostname not in LOOPBACK_HOSTS:
+        return None
+    return hostname, port
+
+
+def _origin_allowed(request: Request) -> bool:
+    host = _host_parts(request)
+    if host is None:
+        return False
+    origin = request.headers.get("origin")
+    if not origin:
+        return True
+    if origin in ALLOWED_ORIGINS:
+        return True
+    try:
+        parsed = urlsplit(origin)
+        origin_hostname = (parsed.hostname or "").casefold()
+        origin_port = parsed.port or 80
+    except ValueError:
+        return False
+    if parsed.scheme != "http" or origin_hostname not in LOOPBACK_HOSTS:
+        return False
+    host_port = host[1] or 80
+    return origin_hostname == host[0] and origin_port == host_port
+
+
+@app.middleware("http")
+async def restrict_local_requests(request: Request, call_next):
+    if not _origin_allowed(request):
+        return JSONResponse(status_code=403, content={"detail": "unapproved local origin or host"})
+    return await call_next(request)
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=sorted(ALLOWED_ORIGINS),
+    allow_methods=["GET", "POST", "PATCH", "PUT", "OPTIONS"],
+    allow_headers=["Content-Type", "X-DeusCFO-Token"],
 )
+
+
+def _configured_league() -> str:
+    try:
+        with CONFIG_PATH.open(encoding="utf-8") as handle:
+            value = json.load(handle).get("league")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    except (OSError, json.JSONDecodeError, AttributeError):
+        pass
+    return os.environ.get("DEUSCFO_LEAGUE", "").strip()
+
+
+def _persist_config(league: str) -> None:
+    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix="deuscfo.config.", suffix=".tmp", dir=CONFIG_PATH.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump({"league": league}, handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+        os.replace(temporary, CONFIG_PATH)
+    except Exception:
+        # Preserve atomic replacement semantics while cleaning up any temp file.
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+        raise
+
+
+async def _available_leagues() -> list[str] | None:
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(f"{POE_NINJA_BASE}/poe1/api/economy/leagues")
+            if response.status_code != 200:
+                return None
+            payload = response.json()
+    except Exception:
+        # Network/shape failures fail closed for configuration writes.
+        log.exception("could not fetch current poe.ninja leagues")
+        return None
+    if not isinstance(payload, list):
+        return None
+    return sorted({item["id"] for item in payload if isinstance(item, dict) and isinstance(item.get("id"), str)})
+
+
+async def require_local_session(request: Request) -> None:
+    token = request.headers.get("X-DeusCFO-Token", "")
+    if not token or not hmac.compare_digest(token, SESSION_TOKEN):
+        raise HTTPException(status_code=403, detail="valid local session token required")
 
 POE_NINJA_BASE = "https://poe.ninja"
 
@@ -99,6 +204,45 @@ async def get_leagues():
         if resp.status_code != 200:
             raise HTTPException(status_code=502, detail="Failed to fetch leagues")
         return resp.json()
+
+class ConfigRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    league: str = Field(min_length=1)
+
+
+@app.get("/api/session")
+async def get_session(request: Request):
+    """Return the process-local token only after local host/origin middleware approval."""
+    return {"token": SESSION_TOKEN}
+
+
+@app.get("/api/config")
+async def get_config():
+    league = _configured_league()
+    available = await _available_leagues()
+    known = available is not None
+    values = available or []
+    return {
+        "league": league,
+        "available": values,
+        "migration_required": known and bool(league) and league not in values,
+    }
+
+
+@app.put("/api/config", dependencies=[Depends(require_local_session)])
+async def update_config(request: ConfigRequest):
+    available = await _available_leagues()
+    if available is None:
+        raise HTTPException(status_code=503, detail="current league list unavailable")
+    if request.league not in available:
+        raise HTTPException(status_code=400, detail="selected league is not currently available")
+    _persist_config(request.league)
+    return {
+        "league": request.league,
+        "available": available,
+        "migration_required": False,
+    }
 
 
 @app.get("/api/categories")
@@ -185,7 +329,7 @@ async def _fetch_stash(client, league, category_type):
     return data.get("lines", [])
 
 
-@app.post("/api/flips")
+@app.post("/api/flips", dependencies=[Depends(require_local_session)])
 async def find_flips(request: FlipRequest):
     category = request.category
     if category not in ALL_CATEGORIES:
@@ -299,7 +443,7 @@ class SnapshotRequest(BaseModel):
     category: str | None = None
 
 
-@app.post("/api/snapshot")
+@app.post("/api/snapshot", dependencies=[Depends(require_local_session)])
 async def trigger_snapshot(request: SnapshotRequest):
     """Manually trigger snapshot collection for a league (optionally one category)."""
     if request.category and request.category not in ALL_CATEGORIES:
@@ -447,7 +591,7 @@ class CapitalPlanRequest(BaseModel):
     simulations: int = 2000
 
 
-@app.post("/api/capital/plan")
+@app.post("/api/capital/plan", dependencies=[Depends(require_local_session)])
 async def create_capital_plan(request: CapitalPlanRequest):
     """Return a conservative DEPLOY/WAIT plan from V1.1-filtered opportunities."""
     if request.hours <= 0 or request.simulations <= 0:
@@ -514,6 +658,7 @@ async def create_capital_plan(request: CapitalPlanRequest):
                 "active_poe_patch": active_poe_patch,
             }
             candidates.extend(provider.discover(provider_context))
+            candidates.extend(strategies.default_deferred_strategy_provider().discover(provider_context))
             div_registry = strategies.default_div_card_registry()
             if active_poe_patch == div_registry.poe_patch:
                 candidates.extend(strategies.DivinationCardStrategyProvider(
@@ -587,7 +732,7 @@ class PaperPortfolioRequest(BaseModel):
     name: str = Field(default="default", min_length=1)
 
 
-@app.post("/api/paper/portfolios")
+@app.post("/api/paper/portfolios", dependencies=[Depends(require_local_session)])
 async def create_paper_portfolio(request: PaperPortfolioRequest):
     try:
         portfolio_id = await portfolio.create_paper_portfolio(
@@ -657,7 +802,7 @@ class PaperPositionRequest(BaseModel):
     opened_at: str | None = None
 
 
-@app.post("/api/paper/portfolios/{portfolio_id}/positions")
+@app.post("/api/paper/portfolios/{portfolio_id}/positions", dependencies=[Depends(require_local_session)])
 async def open_paper_position(portfolio_id: int, request: PaperPositionRequest):
     try:
         position_id = await portfolio.open_paper_position(
@@ -688,7 +833,7 @@ class PaperRealizeRequest(BaseModel):
     quantity: float | None = Field(default=None, gt=0)
 
 
-@app.post("/api/paper/positions/{position_id}/realize")
+@app.post("/api/paper/positions/{position_id}/realize", dependencies=[Depends(require_local_session)])
 async def realize_paper_position(position_id: int, request: PaperRealizeRequest):
     try:
         return await portfolio.realize_paper_position(
@@ -714,7 +859,7 @@ class LinkedTradeCorrectionRequest(BaseModel):
     confidence: float | None = Field(default=None, ge=0, le=1)
 
 
-@app.patch("/api/paper/trades/{trade_id}")
+@app.patch("/api/paper/trades/{trade_id}", dependencies=[Depends(require_local_session)])
 async def correct_linked_trade(trade_id: int, request: LinkedTradeCorrectionRequest):
     try:
         return await portfolio.correct_linked_trade(
@@ -747,7 +892,7 @@ class RealTradeRequest(BaseModel):
     chaos_per_divine: float = Field(gt=0)
 
 
-@app.post("/api/paper/trades/real")
+@app.post("/api/paper/trades/real", dependencies=[Depends(require_local_session)])
 async def record_real_trade(request: RealTradeRequest):
     try:
         return await portfolio.record_real_trade(**request.model_dump())
@@ -852,7 +997,7 @@ async def get_profit_routes(
     ``poe_patch`` is retained only for response compatibility; callers cannot
     override the active metadata used for verification.
     """
-    if category and category not in ALL_CATEGORIES and category != "Transformation":
+    if category and category not in ALL_CATEGORIES and category not in {"Transformation", "Assembly", "VendorTransformation", "ArbitrageGraph", "SixLink"}:
         raise HTTPException(status_code=400, detail=f"unknown category: {category}")
     active_poe_patch = await resolve_active_poe_patch(league)
     market = _latest_market_context(await market_data.get_all_latest(league))
@@ -860,6 +1005,7 @@ async def get_profit_routes(
     routes = list(strategies.TransformationStrategyProvider(
         strategies.default_transformation_registry()
     ).evaluate(context))
+    routes.extend(strategies.default_deferred_strategy_provider().evaluate(context))
     div_registry = strategies.default_div_card_registry() if category in (None, "DivinationCard") else None
     if not active_poe_patch:
         patch_reasons = ["active PoE patch metadata is unknown; divination-card recipes are withheld"]
@@ -911,7 +1057,7 @@ class TransformationEvaluateRequest(BaseModel):
         return value
 
 
-@app.post("/api/strategies/transformations/evaluate")
+@app.post("/api/strategies/transformations/evaluate", dependencies=[Depends(require_local_session)])
 async def evaluate_transformations(request: TransformationEvaluateRequest):
     try:
         provider = strategies.TransformationStrategyProvider(
@@ -940,7 +1086,7 @@ class ReallocationCheckRequest(BaseModel):
     minimum_advantage: float = Field(default=0, ge=0)
 
 
-@app.post("/api/reallocation/check")
+@app.post("/api/reallocation/check", dependencies=[Depends(require_local_session)])
 async def check_reallocation(request: ReallocationCheckRequest):
     try:
         decision = portfolio.should_reallocate(
@@ -1089,7 +1235,7 @@ class StrategyRequest(BaseModel):
     signal_window_hours: float = 24
 
 
-@app.post("/api/strategy/backtest")
+@app.post("/api/strategy/backtest", dependencies=[Depends(require_local_session)])
 async def strategy_backtest(request: StrategyRequest):
     """Evaluate only the supported declarative strategy condition fields."""
     if request.category and request.category not in ALL_CATEGORIES:
@@ -1140,7 +1286,7 @@ class CxBackfillRequest(BaseModel):
     max_hours: int | None = None
 
 
-@app.post("/api/cx/backfill")
+@app.post("/api/cx/backfill", dependencies=[Depends(require_local_session)])
 async def cx_backfill(request: CxBackfillRequest):
     """Backfill currency-exchange history from saved progress (or oldest)."""
     max_hours = request.max_hours or 168
@@ -1148,7 +1294,7 @@ async def cx_backfill(request: CxBackfillRequest):
     return {"hours_processed": hours}
 
 
-@app.post("/api/cx/poll")
+@app.post("/api/cx/poll", dependencies=[Depends(require_local_session)])
 async def cx_poll():
     """Poll for the latest currency-exchange hour."""
     stored = await cx_collector.poll_latest_cx()
@@ -1185,10 +1331,10 @@ async def cx_history(league: str, item_id: str, hours: int = 24, ref: str = "aut
     for r in rows:
         if r["item_a"] in candidates:
             mine, other = r["item_a"], r["item_b"]
-            side, other_side = "a", "b"
+            side = "a"
         else:
             mine, other = r["item_b"], r["item_a"]
-            side, other_side = "b", "a"
+            side = "b"
         can_be_ref = other == ref_meta  # this row prices the item vs the ref
         price = r[f"lowest_ratio_{side}"]
         ref_name = "chaos" if other == CHAOS else ("divine" if other == DIVINE else "other")
@@ -1233,3 +1379,21 @@ async def data_coverage_category(league: str, category: str):
     if category == "Currency Exchange":
         return await coverage.cx_coverage(league)
     return await coverage.snapshot_coverage(league, category)
+
+@app.get("/{path:path}", include_in_schema=False)
+async def frontend_app(path: str):
+    """Serve packaged assets without starting Vite; unknown paths fall back to index."""
+    if path == "api" or path.startswith("api/"):
+        raise HTTPException(status_code=404, detail="not found")
+    root = FRONTEND_DIST.resolve()
+    candidate = (root / path).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="not found") from None
+    if candidate.is_file():
+        return FileResponse(candidate)
+    index = root / "index.html"
+    if index.is_file():
+        return FileResponse(index)
+    raise HTTPException(status_code=404, detail="frontend build is unavailable")

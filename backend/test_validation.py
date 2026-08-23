@@ -22,7 +22,6 @@ def row(timestamp, price, volume=100, item_id="item", category="Currency"):
 def test_historical_detector_ignores_rows_after_event():
     start = datetime(2026, 1, 1, tzinfo=timezone.utc)
     rows = [row(start, 100), row(start + timedelta(hours=1), 101)]
-    at_event = validation.detect_historical_signals(rows, rows[-1]["timestamp"], 24)
     rows.append(row(start + timedelta(hours=2), 160, 400))
     still_at_event = validation.detect_historical_signals(rows, rows[1]["timestamp"], 24)
     later = validation.detect_historical_signals(rows, rows[-1]["timestamp"], 24)

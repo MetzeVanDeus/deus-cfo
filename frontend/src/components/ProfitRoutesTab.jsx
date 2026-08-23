@@ -48,7 +48,7 @@ export function ProfitRoutesTab({ categories = [], selectedLeague }) {
   }, [selectedLeague, category])
 
   return <div className="terminal-page">
-    <div className="page-head"><div><div className="eyebrow">MONEY PRINTER / CAPITAL DEPLOYMENT</div><h1>Profit Routes</h1><p className="muted">Backend-evaluated transformations ranked for capital deployment. Theoretical routes stay visible when executable depth or positive net profit is not verified.</p></div></div>
+    <div className="page-head"><div><div className="eyebrow">MONEY PRINTER / CAPITAL DEPLOYMENT</div><h1>Profit Routes</h1><p className="muted">Production coverage is intentionally narrow: Doctor → Headhunter is the only accepted route today. Assembly, vendor, graph, six-link, and other families remain unsupported until verified records exist. Theoretical routes stay visible when executable depth or positive net profit is not verified.</p></div></div>
     <div className="terminal-panel strategy-form"><div className="form-row form-row-main"><label className="field"><span>Category</span><select className="input" value={category} onChange={(event) => setCategory(event.target.value)}><option value="">All categories</option>{categories.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label></div></div>
     {!selectedLeague && <div className="terminal-panel"><EmptyState title="Select a league" message="Profit routes wait for a selected league before requesting market data." /></div>}
     {selectedLeague && loading && <div className="terminal-panel"><LoadingState text="Loading profit routes…" /></div>}

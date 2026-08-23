@@ -3,7 +3,6 @@
 import asyncio
 import sqlite3
 
-import aiosqlite
 
 import database
 import market_data

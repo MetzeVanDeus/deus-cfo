@@ -3,6 +3,32 @@ import axios from 'axios'
 export const API_BASE = '/api'
 export const api = axios.create({ baseURL: API_BASE })
 
+let sessionToken = ''
+let sessionRequest = null
+
+export const getSessionToken = async () => {
+  if (sessionToken) return sessionToken
+  sessionRequest ||= axios.get(`${API_BASE}/session`).then(({ data }) => {
+    sessionToken = data?.token || ''
+    if (!sessionToken) throw new Error('Local session token was not returned')
+    return sessionToken
+  }).catch((error) => {
+    sessionRequest = null
+    throw error
+  })
+  return sessionRequest
+}
+
+api.interceptors.request.use(async (config) => {
+  const method = (config.method || 'get').toUpperCase()
+  if (!['GET', 'HEAD', 'OPTIONS'].includes(method)) {
+    const token = await getSessionToken()
+    config.headers = config.headers || {}
+    config.headers['X-DeusCFO-Token'] = token
+  }
+  return config
+})
+
 /**
  * Signal type → dracula color name.
  * Red: crashes/supply shocks/bearish.

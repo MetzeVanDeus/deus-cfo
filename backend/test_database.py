@@ -110,6 +110,48 @@ def test_prune_market_data_removes_unsupported_and_expired_rows(tmp_path, monkey
 
     asyncio.run(run())
 
+
+def test_prune_ignores_transient_wal_checkpoint_lock(monkeypatch):
+    calls = []
+
+    class Cursor:
+        def __init__(self, rowcount=0):
+            self.rowcount = rowcount
+
+    class LockedCheckpoint:
+        async def execute(self, sql, *_args):
+            calls.append(sql)
+            if sql.startswith("DELETE FROM snapshots"):
+                return Cursor(1)
+            if sql.startswith("DELETE FROM cx_history"):
+                return Cursor(2)
+            if sql == "PRAGMA wal_checkpoint(TRUNCATE)":
+                raise aiosqlite.OperationalError("database table is locked")
+            return Cursor()
+
+        async def commit(self):
+            calls.append("commit")
+
+        async def close(self):
+            calls.append("close")
+
+    db = LockedCheckpoint()
+
+    async def get_db():
+        return db
+
+    monkeypatch.setattr(database, "get_db", get_db)
+
+    deleted = asyncio.run(database.prune_market_data({"Currency"}, league="Allflame"))
+
+    assert deleted == {
+        "unsupported_snapshots": 1,
+        "expired_snapshots": 1,
+        "expired_cx_rows": 2,
+    }
+    assert "PRAGMA wal_checkpoint(TRUNCATE)" in calls
+    assert calls[-1] == "close"
+
 def test_snapshot_observations_are_idempotent(tmp_path, monkeypatch):
     path = tmp_path / "deuscfo.db"
     monkeypatch.setattr(database, "DB_PATH", str(path))
@@ -236,3 +278,16 @@ def test_paper_migration_converts_realized_equity_curve(tmp_path, monkeypatch):
         {"equity": 1100, "realized_profit": 100},
     ]
     assert position["entry_price"] == 160
+
+def test_collection_guard_counts_database_outside_project(tmp_path, monkeypatch):
+    project = tmp_path / "project"
+    monkeypatch.setattr(database, "PROJECT_ROOT", str(project))
+    monkeypatch.setattr(database, "project_footprint", lambda: 100)
+    monkeypatch.setattr(database, "storage_footprint", lambda: {"total": 100})
+    monkeypatch.setattr(database, "COLLECTION_STOP_BYTES", 150)
+
+    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "data" / "deuscfo.db"))
+    assert database.collection_allowed() is False
+
+    monkeypatch.setattr(database, "DB_PATH", str(project / "deuscfo.db"))
+    assert database.collection_allowed() is True

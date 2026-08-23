@@ -7,7 +7,6 @@ from pydantic import BaseModel
 
 import anomalies as anomaly_mod
 import regimes as regime_mod
-import signals as signals_mod
 import market_data
 import validation
 HISTORICAL_OUTCOME_HOURS = 24
@@ -117,7 +116,6 @@ def normalize_opportunity(
     """Adapt chaos-priced opportunities into Divine-denominated capital fields."""
     if chaos_per_divine is None or chaos_per_divine <= 0:
         raise ValueError("positive chaos_per_divine is required for normalization")
-    current = now or datetime.now(timezone.utc)
     created = datetime.fromisoformat(opportunity.timestamp.replace("Z", "+00:00"))
     if created.tzinfo is None:
         created = created.replace(tzinfo=timezone.utc)
@@ -187,8 +185,6 @@ def normalize_opportunity(
     if (filter_rejection or (reconstructed_dependent and tier == "B")) and not paper_reconstructed:
         tier = "REJECTED"
     half_life = max(1.0, duration)
-    expires = created.timestamp() + half_life * 3600
-    expires_at = datetime.fromtimestamp(expires, timezone.utc).isoformat(timespec="seconds")
     profit_per_unit = float(opportunity.realistic_profit or (entry * expected_return / 100)) / chaos_per_divine
     calibration = dict(context.get("calibration") or {})
     duration_distribution = [duration] if calibration.get("applied") else duration_samples

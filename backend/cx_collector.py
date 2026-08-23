@@ -7,9 +7,11 @@ cx_history, tracking pagination progress in cx_progress.
 
 import asyncio
 import datetime
+import math
 import logging
 
 import httpx
+
 
 import database
 
@@ -21,29 +23,47 @@ REQUEST_DELAY = 0.5  # seconds between CDN fetches
 
 
 def _resolve_league(league: str, wanted_leagues: set[str]) -> str | None:
-    """Map a CX league name onto a poe.ninja league (case-insensitive).
-
-    CX reports real league display names (e.g. 'Hardcore Allflame'),
-    poe.ninja ids are the same strings.  Returns None for private leagues.
-    """
-    for w in wanted_leagues:
-        if league.lower() == w.lower():
-            return w
+    """Map a CX league name onto a poe.ninja league (case-insensitive)."""
+    if not isinstance(league, str):
+        return None
+    for wanted in wanted_leagues:
+        if isinstance(wanted, str) and league.casefold() == wanted.casefold():
+            return wanted
     return None
 
 
+def _valid_change_id(data: object) -> int | None:
+    if not isinstance(data, dict):
+        return None
+    value = data.get("next_change_id")
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
+
+
+def _market_number(value):
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return value if math.isfinite(float(value)) else None
+
+
+def _market_map(value) -> dict:
+    return value if isinstance(value, dict) else {}
+
+
 async def _fetch_leagues() -> set[str]:
-    """poe.ninja league ids we care about (cache for the process lifetime)."""
+    """Return currently published poe.ninja league ids, or none on failure."""
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.get(POE_NINJA_LEAGUES)
             if resp.status_code == 200:
-                return {l["id"] for l in resp.json() if "id" in l}
+                return {
+                    league["id"] for league in resp.json()
+                    if isinstance(league, dict) and isinstance(league.get("id"), str)
+                }
     except Exception:
         log.exception("could not fetch poe.ninja leagues")
-    # Fallback: the perma/void league names we want even if poe.ninja hiccups
-    return {"Standard", "Hardcore", "Allflame", "Hardcore Allflame",
-            "Ruthless Allflame", "HC Ruthless Allflame", "Ruthless"}
+    return set()
 
 
 async def fetch_currency_exchange(change_id: int | None = None) -> dict:
@@ -56,39 +76,48 @@ async def fetch_currency_exchange(change_id: int | None = None) -> dict:
 
 
 def _parse_hour(data: dict, wanted_leagues: set[str]) -> tuple[str, list[dict]]:
-    """Turn a raw API response into (iso_timestamp, filtered market records).
-
-    Records carry provenance: source, observation_type, confidence_grade,
-    market_timestamp (= the hour's unix timestamp as ISO), realm.
-    """
-    ncid = data.get("next_change_id")
-    ts = datetime.datetime.fromtimestamp(ncid, datetime.timezone.utc).isoformat(timespec="seconds") if ncid else ""
+    """Turn a valid raw API response into (iso_timestamp, filtered markets)."""
+    ncid = _valid_change_id(data)
+    markets = data.get("markets") if isinstance(data, dict) else None
+    if ncid is None or not isinstance(markets, list):
+        return "", []
+    ts = datetime.datetime.fromtimestamp(ncid, datetime.timezone.utc).isoformat(timespec="seconds")
     records = []
-    for m in data.get("markets", []):
-        league = _resolve_league(m.get("league", ""), wanted_leagues)
+    for market in markets:
+        if not isinstance(market, dict):
+            continue
+        league = _resolve_league(market.get("league"), wanted_leagues)
         if league is None:
             continue
-        market_id = m.get("market_id", "")
-        pair = m.get("market_pair", [])
-        if len(pair) != 2:
+        market_id = market.get("market_id")
+        pair = market.get("market_pair")
+        if (
+            not isinstance(market_id, str)
+            or not market_id
+            or not isinstance(pair, list)
+            or len(pair) != 2
+            or not all(isinstance(item, str) and item for item in pair)
+        ):
             continue
         a, b = pair
-        v = m.get("volume_traded", {})
-        lo = m.get("lowest_stock", {})
-        hi = m.get("highest_stock", {})
-        lr = m.get("lowest_ratio", {})
-        hr = m.get("highest_ratio", {})
+        volume = _market_map(market.get("volume_traded"))
+        lowest_stock = _market_map(market.get("lowest_stock"))
+        highest_stock = _market_map(market.get("highest_stock"))
+        lowest_ratio = _market_map(market.get("lowest_ratio"))
+        highest_ratio = _market_map(market.get("highest_ratio"))
         records.append({
             "league": league, "market_id": market_id, "item_a": a, "item_b": b,
-            "volume_a": v.get(a), "volume_b": v.get(b),
-            "lowest_stock_a": lo.get(a), "lowest_stock_b": lo.get(b),
-            "highest_stock_a": hi.get(a), "highest_stock_b": hi.get(b),
-            "lowest_ratio_a": lr.get(a), "lowest_ratio_b": lr.get(b),
-            "highest_ratio_a": hr.get(a), "highest_ratio_b": hr.get(b),
-            "realm": "poe1",
-            "source": "ggg_currency_exchange",
-            "observation_type": "OFFICIAL_HISTORICAL",
-            "market_timestamp": ts,
+            "volume_a": _market_number(volume.get(a)), "volume_b": _market_number(volume.get(b)),
+            "lowest_stock_a": _market_number(lowest_stock.get(a)),
+            "lowest_stock_b": _market_number(lowest_stock.get(b)),
+            "highest_stock_a": _market_number(highest_stock.get(a)),
+            "highest_stock_b": _market_number(highest_stock.get(b)),
+            "lowest_ratio_a": _market_number(lowest_ratio.get(a)),
+            "lowest_ratio_b": _market_number(lowest_ratio.get(b)),
+            "highest_ratio_a": _market_number(highest_ratio.get(a)),
+            "highest_ratio_b": _market_number(highest_ratio.get(b)),
+            "realm": "poe1", "source": "ggg_currency_exchange",
+            "observation_type": "OFFICIAL_HISTORICAL", "market_timestamp": ts,
             "confidence_grade": "A",
         })
     return ts, records
@@ -106,7 +135,11 @@ async def backfill_currency_exchange(max_hours: int = 168) -> int:
     Returns the number of hours processed.
     """
     wanted = await _fetch_leagues()
-    last = await database.get_cx_progress("default")
+    try:
+        last = await database.get_cx_progress("default")
+    except Exception:
+        log.exception("cx backfill: progress read failed")
+        return 0
     change_id = last
     first_change_id = None
     first_hour = None
@@ -117,27 +150,31 @@ async def backfill_currency_exchange(max_hours: int = 168) -> int:
         except Exception:
             log.exception("cx backfill: fetch failed at change_id=%s", change_id)
             break
-        ncid = data.get("next_change_id")
+        ncid = _valid_change_id(data)
         if ncid is None:
-            log.error("cx backfill: no next_change_id in response")
+            log.error("cx backfill: malformed response at change_id=%s", change_id)
             break
         if change_id is not None and ncid == change_id:
             log.info("cx backfill: reached current hour at %s", ncid)
             break
-        ts, records = _parse_hour(data, wanted)
-        stored = await database.insert_cx_hour(records, ts) if records else 0
-        # stored <= len(records) because insert is idempotent (ON CONFLICT DO NOTHING);
-        # Fresh start (no saved progress): record the first available hour.
-        # On resume, first_* is preserved (set_cx_progress keeps existing).
-        if last is None and first_change_id is None:
-            first_change_id = ncid
-            first_hour = ts
-        await database.set_cx_progress(
-            "default", ncid,
-            first_change_id=first_change_id,
-            first_available_hour=first_hour,
-            last_synced_hour=ts,
-        )
+        try:
+            ts, records = _parse_hour(data, wanted)
+            if not ts:
+                log.error("cx backfill: malformed hour at change_id=%s", change_id)
+                break
+            stored = await database.insert_cx_hour(records, ts) if records else 0
+            if last is None and first_change_id is None:
+                first_change_id = ncid
+                first_hour = ts
+            await database.set_cx_progress(
+                "default", ncid,
+                first_change_id=first_change_id,
+                first_available_hour=first_hour,
+                last_synced_hour=ts,
+            )
+        except Exception:
+            log.exception("cx backfill: store failed at change_id=%s", ncid)
+            break
         log.info("cx backfill: stored %d entries for hour %s (next=%s)", stored, ts, ncid)
         change_id = ncid
         hours += 1
@@ -149,24 +186,32 @@ async def backfill_currency_exchange(max_hours: int = 168) -> int:
 async def poll_latest_cx() -> int:
     """Fetch the latest hour and store it. Returns entries stored (0 if up to date)."""
     wanted = await _fetch_leagues()
-    last = await database.get_cx_progress("default")
+    try:
+        last = await database.get_cx_progress("default")
+    except Exception:
+        log.exception("cx poll: progress read failed")
+        return 0
     try:
         data = await fetch_currency_exchange(last)
     except Exception:
         log.exception("cx poll: fetch failed")
         return 0
-    ncid = data.get("next_change_id")
+    ncid = _valid_change_id(data)
     if ncid is None:
-        log.error("cx poll: no next_change_id in response")
+        log.error("cx poll: malformed response")
         return 0
     if last is not None and ncid == last:
         log.info("cx poll: already up to date at %s", ncid)
         return 0
-    ts, records = _parse_hour(data, wanted)
-    stored = await database.insert_cx_hour(records, ts) if records else 0
-    await database.set_cx_progress(
-        "default", ncid,
-        last_synced_hour=ts,
-    )
+    try:
+        ts, records = _parse_hour(data, wanted)
+        if not ts:
+            log.error("cx poll: malformed hour")
+            return 0
+        stored = await database.insert_cx_hour(records, ts) if records else 0
+        await database.set_cx_progress("default", ncid, last_synced_hour=ts)
+    except Exception:
+        log.exception("cx poll: store failed at change_id=%s", ncid)
+        return 0
     log.info("cx poll: stored %d entries for hour %s", stored, ts)
     return stored

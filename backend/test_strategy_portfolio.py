@@ -64,7 +64,7 @@ def test_recommendation_journal_is_append_only(isolated_db):
         }
         second = {"bankroll": 48, "positions": [{"id": "b"}], "reserve": 20, "expected_profit": 1, "expected_distribution": {"p": 0.6}}
         first_id = await portfolio.append_recommendation(first)
-        second_id = await portfolio.append_recommendation(second)
+        await portfolio.append_recommendation(second)
         rows = await portfolio.list_recommendations()
         with pytest.raises(sqlite3.DatabaseError):
             db = await database.get_db()

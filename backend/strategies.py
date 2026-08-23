@@ -931,3 +931,563 @@ class DivinationCardStrategyProvider:
             if route.expected_net_profit > 0 and route.market_capacity > 0 and route.sets_possible_with_budget > 0
             and definitions[route.transformation_id]["deterministic"] in (True, False)
         ]
+
+
+_DETERMINISTIC_LIFECYCLE = {item.value for item in StrategyLifecycle}
+_DETERMINISTIC_COMPONENT_KEYS = {"item", "item_id", "market_key", "quantity", "category"}
+_DETERMINISTIC_RECORD_KEYS = {
+    "id", "name", "inputs", "outputs", "conversion_costs", "friction_chaos",
+    "status", "category", "source", "verified_version", "poe_patch",
+    "strategy_confidence", "max_batch", "expected_execution_time_hours",
+    "expected_sale_time_hours", "sale_fee_rate", "output_discount_rate",
+    "manual_actions",
+}
+
+
+def _deterministic_components(value: Any, field_name: str, *, one: bool = False) -> list[dict[str, Any]]:
+    if not isinstance(value, list) or not value or (one and len(value) != 1):
+        raise ValueError(f"{field_name} must be a non-empty list")
+    result: list[dict[str, Any]] = []
+    for component in value:
+        if not isinstance(component, Mapping) or set(component) - _DETERMINISTIC_COMPONENT_KEYS:
+            raise ValueError(f"{field_name} contains an unsupported component")
+        item = component.get("item")
+        market_key = component.get("market_key")
+        quantity = component.get("quantity")
+        if not isinstance(item, str) or not item.strip():
+            raise ValueError(f"{field_name} item is required")
+        if not isinstance(market_key, str) or not market_key.strip():
+            raise ValueError(f"{field_name} market_key is required")
+        if not isinstance(quantity, (int, float)) or isinstance(quantity, bool) or not math.isfinite(float(quantity)) or quantity <= 0:
+            raise ValueError(f"{field_name} quantity must be positive")
+        result.append(dict(component))
+    return result
+
+
+def _validate_deterministic_record(record: Mapping[str, Any], *, kind: str) -> dict[str, Any]:
+    if not isinstance(record, Mapping):
+        raise ValueError(f"{kind} transformation must be an object")
+    unknown = set(record) - _DETERMINISTIC_RECORD_KEYS
+    if unknown:
+        raise ValueError(f"unmodelled {kind} fields: {sorted(unknown)}")
+    required = {"id", "name", "inputs", "outputs", "source", "verified_version"}
+    missing = required - set(record)
+    if missing:
+        raise ValueError(f"incomplete {kind} transformation: missing {sorted(missing)}")
+    if not isinstance(record["id"], str) or not record["id"].strip():
+        raise ValueError(f"{kind} transformation id is required")
+    if record.get("status", StrategyLifecycle.VALIDATED.value) not in _DETERMINISTIC_LIFECYCLE:
+        raise ValueError("unknown strategy lifecycle")
+    if not isinstance(record["source"], str) or not record["source"].strip() or record["source"] == "unverified":
+        raise ValueError(f"{kind} source must be verified")
+    if not isinstance(record["verified_version"], str) or not record["verified_version"].strip() or record["verified_version"] == "unverified":
+        raise ValueError(f"{kind} verified_version is required")
+    result = dict(record)
+    result["inputs"] = _deterministic_components(record["inputs"], "inputs")
+    result["outputs"] = _deterministic_components(record["outputs"], "outputs", one=True)
+    result["conversion_costs"] = _deterministic_components(record.get("conversion_costs", []), "conversion_costs") if record.get("conversion_costs") else []
+    result.setdefault("status", StrategyLifecycle.VALIDATED.value)
+    result.setdefault("category", "Transformation")
+    result.setdefault("poe_patch", None)
+    result.setdefault("strategy_confidence", 1.0)
+    result.setdefault("max_batch", 1)
+    result.setdefault("friction_chaos", 0.0)
+    result.setdefault("expected_execution_time_hours", 0.25)
+    result.setdefault("expected_sale_time_hours", 0.0)
+    result.setdefault("sale_fee_rate", 0.0)
+    result.setdefault("output_discount_rate", 0.0)
+    result.setdefault("manual_actions", [])
+    for field in ("friction_chaos", "expected_execution_time_hours", "expected_sale_time_hours", "sale_fee_rate", "output_discount_rate", "strategy_confidence"):
+        value = result[field]
+        if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(float(value)) or value < 0:
+            raise ValueError(f"{field} must be non-negative")
+    if result["expected_execution_time_hours"] <= 0:
+        raise ValueError("expected_execution_time_hours must be positive")
+    if result["sale_fee_rate"] >= 1 or result["output_discount_rate"] >= 1 or result["strategy_confidence"] > 1:
+        raise ValueError("fee, discount, and strategy_confidence values are out of range")
+    if not isinstance(result["max_batch"], int) or result["max_batch"] < 1:
+        raise ValueError("max_batch must be a positive integer")
+    if not isinstance(result["manual_actions"], list):
+        raise ValueError("manual_actions must be a list")
+    return result
+
+
+class DeterministicTransformationRegistry:
+    """Verified, exact-key transformations used by the bounded graph providers."""
+
+    def __init__(self, records: Sequence[Mapping[str, Any]] = (), *, kind: str = "deterministic") -> None:
+        self.kind = kind
+        self._records: dict[str, dict[str, Any]] = {}
+        for record in records:
+            self.register(record)
+
+    def register(self, record: Mapping[str, Any]) -> None:
+        normalized = _validate_deterministic_record(record, kind=self.kind)
+        if normalized["id"] in self._records:
+            raise ValueError(f"duplicate transformation: {normalized['id']}")
+        self._records[normalized["id"]] = normalized
+
+    def records(self) -> tuple[dict[str, Any], ...]:
+        return tuple(dict(record) for record in self._records.values())
+
+
+class AssemblyTransformationRegistry:
+    """Registry for explicit part/whole recipes; no recipe is inferred."""
+
+    def __init__(self, records: Sequence[Mapping[str, Any]] = ()) -> None:
+        self._records: dict[str, dict[str, Any]] = {}
+        for record in records:
+            self.register(record)
+
+    def register(self, record: Mapping[str, Any]) -> None:
+        if not isinstance(record, Mapping):
+            raise ValueError("assembly transformation must be an object")
+        allowed = _DETERMINISTIC_RECORD_KEYS | {"parts", "whole", "direction"}
+        unknown = set(record) - allowed
+        if unknown:
+            raise ValueError(f"unmodelled assembly fields: {sorted(unknown)}")
+        if "parts" not in record or "whole" not in record:
+            raise ValueError("assembly transformation requires parts and whole")
+        parts = _deterministic_components(record["parts"], "parts")
+        whole = _deterministic_components(record["whole"], "whole", one=True)
+        direction = record.get("direction", "assemble")
+        if direction not in {"assemble", "disassemble", "both"}:
+            raise ValueError("direction must be assemble, disassemble, or both")
+        normalized = {
+            key: value for key, value in record.items()
+            if key in _DETERMINISTIC_RECORD_KEYS
+        }
+        normalized.update({"inputs": parts, "outputs": whole})
+        normalized = _validate_deterministic_record(normalized, kind="assembly")
+        normalized["direction"] = direction
+        normalized["parts"] = parts
+        normalized["whole"] = whole
+        if normalized["id"] in self._records:
+            raise ValueError(f"duplicate transformation: {normalized['id']}")
+        self._records[normalized["id"]] = normalized
+
+    def records(self) -> tuple[dict[str, Any], ...]:
+        return tuple(dict(record) for record in self._records.values())
+
+
+class VendorTransformationRegistry(DeterministicTransformationRegistry):
+    def __init__(self, records: Sequence[Mapping[str, Any]] = ()) -> None:
+        super().__init__(records, kind="vendor")
+
+
+class SixLinkRegistry:
+    """Registry for known item identities and deterministic linking methods."""
+
+    def __init__(self, records: Sequence[Mapping[str, Any]] = ()) -> None:
+        self._records: dict[str, dict[str, Any]] = {}
+        for record in records:
+            self.register(record)
+
+    def register(self, record: Mapping[str, Any]) -> None:
+        if not isinstance(record, Mapping):
+            raise ValueError("six-link transformation must be an object")
+        allowed = _DETERMINISTIC_RECORD_KEYS | {
+            "item_id", "base", "linked", "linking_costs", "linking_method",
+        }
+        unknown = set(record) - allowed
+        if unknown:
+            raise ValueError(f"unmodelled six-link fields: {sorted(unknown)}")
+        required = {"id", "name", "item_id", "base", "linked", "linking_method", "source", "verified_version"}
+        missing = required - set(record)
+        if missing:
+            raise ValueError(f"incomplete six-link transformation: missing {sorted(missing)}")
+        if not isinstance(record["item_id"], str) or not record["item_id"].strip():
+            raise ValueError("six-link item_id is required")
+        base = _deterministic_components([record["base"]], "base", one=True)
+        linked = _deterministic_components([record["linked"]], "linked", one=True)
+        if base[0].get("item_id", record["item_id"]) != record["item_id"] or linked[0].get("item_id", record["item_id"]) != record["item_id"]:
+            raise ValueError("base and linked variants must identify the same item")
+        normalized = {
+            key: value for key, value in record.items()
+            if key in _DETERMINISTIC_RECORD_KEYS
+        }
+        normalized.update({"inputs": base, "outputs": linked, "conversion_costs": record.get("linking_costs", [])})
+        normalized = _validate_deterministic_record(normalized, kind="six-link")
+        normalized["item_id"] = record["item_id"]
+        normalized["linking_method"] = record["linking_method"]
+        normalized["linking_costs"] = normalized["conversion_costs"]
+        if not isinstance(normalized["linking_method"], str) or not normalized["linking_method"].strip():
+            raise ValueError("linking_method is required")
+        if normalized["id"] in self._records:
+            raise ValueError(f"duplicate transformation: {normalized['id']}")
+        self._records[normalized["id"]] = normalized
+
+    def records(self) -> tuple[dict[str, Any], ...]:
+        return tuple(dict(record) for record in self._records.values())
+
+
+def default_assembly_registry() -> AssemblyTransformationRegistry:
+    return AssemblyTransformationRegistry()
+
+
+def default_vendor_registry() -> VendorTransformationRegistry:
+    return VendorTransformationRegistry()
+
+
+def default_six_link_registry() -> SixLinkRegistry:
+    return SixLinkRegistry()
+
+
+def _verified_component_price(context: Mapping[str, Any], component: Mapping[str, Any]) -> dict[str, Any] | None:
+    info = _exact_price_info(
+        context.get("prices", {}),
+        context.get("price_records", {}),
+        str(component["market_key"]),
+    )
+    minimum = float(context.get("minimum_strategy_confidence", 0.7) or 0.7)
+    if info is None or info["confidence"] < minimum:
+        return None
+    value = context.get("prices", {}).get(str(component["market_key"]))
+    record = context.get("price_records", {}).get(str(component["market_key"]))
+    if not isinstance(record, Mapping):
+        record = value if isinstance(value, Mapping) else {}
+    volume = record.get("volume") if isinstance(record, Mapping) else None
+    info["volume"] = float(volume) if isinstance(volume, (int, float)) and volume > 0 else None
+    return info
+
+
+def _deferred_route(
+    record: Mapping[str, Any],
+    context: Mapping[str, Any],
+    *,
+    route_id: str | None = None,
+    name: str | None = None,
+    inputs: Sequence[Mapping[str, Any]] | None = None,
+    outputs: Sequence[Mapping[str, Any]] | None = None,
+    conversion_costs: Sequence[Mapping[str, Any]] | None = None,
+    friction_chaos: float | None = None,
+) -> ProfitRoute | None:
+    if record.get("poe_patch") and context.get("active_poe_patch") != record["poe_patch"]:
+        return None
+    inputs = list(inputs or record["inputs"])
+    outputs = list(outputs or record["outputs"])
+    conversion_costs = list(conversion_costs if conversion_costs is not None else record.get("conversion_costs", []))
+    all_costs = inputs + conversion_costs
+    prices = [_verified_component_price(context, item) for item in all_costs + outputs]
+    if any(item is None for item in prices):
+        return None
+    cost_info = prices[:len(all_costs)]
+    output_info = prices[len(all_costs):]
+    material_cost = sum(float(item["quantity"]) * info["price"] for item, info in zip(all_costs, cost_info, strict=True))
+    friction = float(record.get("friction_chaos", 0) if friction_chaos is None else friction_chaos)
+    total_cost = material_cost + friction
+    discount = float(record.get("output_discount_rate", 0))
+    output_value = sum(float(item["quantity"]) * info["price"] for item, info in zip(outputs, output_info, strict=True)) * (1 - discount)
+    sale_fee = float(record.get("sale_fee_rate", 0))
+    net = output_value * (1 - sale_fee) - total_cost
+    total_time = max(0.25, float(record["expected_execution_time_hours"]) + float(record.get("expected_sale_time_hours", 0)))
+    confidence_values = [item["confidence"] for item in prices if item is not None]
+    pricing_confidence = min(confidence_values)
+    strategy_confidence = float(record.get("strategy_confidence", 1.0))
+    confidence = pricing_confidence * strategy_confidence
+    capacities = [info["volume"] / float(component["quantity"]) for component, info in zip(all_costs + outputs, prices, strict=True) if info["volume"]]
+    capacity = min([float(record.get("max_batch", 1)), *capacities]) if capacities else float(record.get("max_batch", 1))
+    manual = list(record.get("manual_actions", []))
+    source_values = sorted({str(info["source"]) for info in prices})
+    source = source_values[0] if len(source_values) == 1 else "mixed"
+    route_status = "manual_only" if manual else "theoretical"
+    chaos_per_divine = float(context.get("chaos_per_divine", 0) or 0)
+    reasons = [
+        "verified deterministic transformation",
+        f"definition source: {record['source']} ({record['verified_version']})",
+        "positive expected net profit" if net > 0 else "negative expected net profit",
+    ]
+    if manual:
+        reasons.append("manual-only execution; automatic allocation is disabled")
+    return ProfitRoute(
+        transformation_id=str(route_id or record["id"]),
+        name=str(name or record["name"]),
+        strategy_family=str(record.get("strategy_family", "deterministic")),
+        status=route_status,
+        league=context.get("league"),
+        category=str(record.get("category", "Transformation")),
+        total_input_cost=total_cost,
+        realistic_output_value=output_value,
+        gross_profit=output_value - total_cost,
+        expected_net_profit=net,
+        roi=net / total_cost if total_cost > 0 else 0.0,
+        theoretical_roi=net / total_cost if total_cost > 0 else None,
+        executable_roi=None,
+        capital_required=total_cost,
+        capacity=max(0.0, capacity),
+        capacity_units="items",
+        expected_execution_time=float(record["expected_execution_time_hours"]),
+        expected_sale_time=float(record.get("expected_sale_time_hours", 0)),
+        profit_per_hour=net / total_time,
+        profit_per_divine_hour=(net / chaos_per_divine) / total_time if chaos_per_divine > 0 else 0.0,
+        reasons=reasons,
+        confidence=confidence,
+        pricing_confidence=pricing_confidence,
+        strategy_confidence=strategy_confidence,
+        execution_risk=1.0 if manual else 0.0,
+        liquidity={"tier": validation.liquidity_tier(capacity), "volume": capacity, "components": {
+            str(component["market_key"]): info["volume"] for component, info in zip(all_costs + outputs, prices, strict=True)
+            if info["volume"] is not None
+        }},
+        source=source,
+        verified_version=str(record["verified_version"]),
+        poe_patch=record.get("poe_patch"),
+        verification_metadata={
+            "definition_source": record["source"],
+            "verified_version": record["verified_version"],
+            "poe_patch": record.get("poe_patch"),
+            "price_sources": source_values,
+            "market_keys": [str(item["market_key"]) for item in all_costs + outputs],
+            "linking_method": record.get("linking_method"),
+        },
+        inputs=[dict(item) for item in inputs],
+        costs=[dict(item) for item in conversion_costs] + ([{"item": "execution friction", "quantity": 1, "chaos": friction}] if friction else []),
+        outputs=[dict(item) for item in outputs],
+        execution_steps=manual,
+    )
+
+
+class AssemblyStrategyProvider:
+    def __init__(self, registry: AssemblyTransformationRegistry) -> None:
+        self.registry = registry
+
+    def evaluate(self, context: Mapping[str, Any]) -> Sequence[ProfitRoute]:
+        requested = context.get("category")
+        routes: list[ProfitRoute] = []
+        for record in self.registry.records():
+            if requested and requested not in {record.get("category", "Transformation"), "Transformation"}:
+                continue
+            if record["status"] in {StrategyLifecycle.REJECTED.value, StrategyLifecycle.DEPRECATED.value}:
+                continue
+            directions = ("assemble", "disassemble") if record["direction"] == "both" else (record["direction"],)
+            for direction in directions:
+                inputs = record["parts"] if direction == "assemble" else record["whole"]
+                outputs = record["whole"] if direction == "assemble" else record["parts"]
+                route = _deferred_route(
+                    record, context,
+                    route_id=record["id"] if direction == "assemble" else f"{record['id']}:disassemble",
+                    name=record["name"] if direction == "assemble" else f"{record['name']} (disassembly)",
+                    inputs=inputs, outputs=outputs,
+                )
+                if route:
+                    route.strategy_family = "deterministic_assembly"
+                    route.verification_metadata["direction"] = direction
+                    if direction == "assemble":
+                        route.reasons.append(
+                            "whole value exceeds part cost" if route.realistic_output_value > route.total_input_cost
+                            else "whole value does not exceed part cost"
+                        )
+                    routes.append(route)
+        return routes
+
+    def discover(self, context: Mapping[str, Any]) -> Sequence[InvestableOpportunity]:
+        return [route.to_investable(status="Validated", max_batch=max(1, int(route.capacity)),
+                                    bankroll=float(context.get("bankroll", 0) or 0),
+                                    chaos_per_divine=float(context.get("chaos_per_divine", 1) or 1))
+                for route in self.evaluate(context)
+                if route.expected_net_profit > 0 and route.status != "manual_only"]
+
+
+class VendorTransformationStrategyProvider:
+    def __init__(self, registry: VendorTransformationRegistry) -> None:
+        self.registry = registry
+
+    def evaluate(self, context: Mapping[str, Any]) -> Sequence[ProfitRoute]:
+        requested = context.get("category")
+        routes = []
+        for record in self.registry.records():
+            if requested and requested not in {record.get("category", "Transformation"), "Transformation"}:
+                continue
+            if record["status"] in {StrategyLifecycle.REJECTED.value, StrategyLifecycle.DEPRECATED.value}:
+                continue
+            route = _deferred_route(context=context, record=record)
+            if route:
+                route.strategy_family = "vendor_transformation"
+                routes.append(route)
+        return routes
+
+    def discover(self, context: Mapping[str, Any]) -> Sequence[InvestableOpportunity]:
+        return [route.to_investable(status="Validated", max_batch=max(1, int(route.capacity)),
+                                    bankroll=float(context.get("bankroll", 0) or 0),
+                                    chaos_per_divine=float(context.get("chaos_per_divine", 1) or 1))
+                for route in self.evaluate(context)
+                if route.expected_net_profit > 0 and route.status != "manual_only"]
+
+
+class ArbitrageGraphStrategyProvider:
+    """Traverse verified item nodes with a small, loop-free edge bound."""
+
+    def __init__(
+        self,
+        registries: Sequence[DeterministicTransformationRegistry | AssemblyTransformationRegistry] | DeterministicTransformationRegistry,
+        *,
+        max_edges: int = 3,
+        min_edges: int = 1,
+    ) -> None:
+        if max_edges < 1 or max_edges > 3 or min_edges < 1 or min_edges > max_edges:
+            raise ValueError("graph edge bounds must be between 1 and 3")
+        self.registries = (registries,) if hasattr(registries, "records") else tuple(registries)
+        self.max_edges = max_edges
+        self.min_edges = min_edges
+
+    def _edges(self) -> list[dict[str, Any]]:
+        edges: list[dict[str, Any]] = []
+        for registry in self.registries:
+            for record in registry.records():
+                if len(record["inputs"]) == 1 and len(record["outputs"]) == 1:
+                    edges.append(record)
+        return edges
+
+    def evaluate(self, context: Mapping[str, Any]) -> Sequence[ProfitRoute]:
+        requested = context.get("category")
+        edges = [record for record in self._edges()
+                 if record["status"] not in {StrategyLifecycle.REJECTED.value, StrategyLifecycle.DEPRECATED.value}
+                 and (not requested or requested in {"Transformation", "ArbitrageGraph", record.get("category", "Transformation")})]
+        routes: list[ProfitRoute] = []
+
+        def walk(path: list[dict[str, Any]], visited: set[str]) -> None:
+            if len(path) >= self.min_edges:
+                metadata = {
+                    (edge["source"], edge["verified_version"], edge.get("poe_patch"))
+                    for edge in path
+                }
+                if len(metadata) != 1:
+                    return
+                first, last = path[0], path[-1]
+                scales = [1.0] * len(path)
+                for index in range(len(path) - 1, 0, -1):
+                    required = float(path[index]["inputs"][0]["quantity"]) * scales[index]
+                    produced = float(path[index - 1]["outputs"][0]["quantity"])
+                    ratio = required / produced
+                    if ratio <= 0 or abs(ratio - round(ratio)) > 1e-9:
+                        return
+                    scales[index - 1] = ratio
+                scaled_inputs = [{**first["inputs"][0], "quantity": first["inputs"][0]["quantity"] * scales[0]}]
+                scaled_outputs = [{**last["outputs"][0], "quantity": last["outputs"][0]["quantity"] * scales[-1]}]
+                conversion_costs: list[dict[str, Any]] = []
+                friction = 0.0
+                for edge, scale in zip(path, scales, strict=True):
+                    conversion_costs.extend(
+                        [{**cost, "quantity": cost["quantity"] * scale} for cost in edge.get("conversion_costs", [])]
+                    )
+                    friction += float(edge.get("friction_chaos", 0)) * scale
+                synthetic = {
+                    **first,
+                    "id": "graph:" + ":".join(edge["id"] for edge in path),
+                    "name": " → ".join(edge["name"] for edge in path),
+                    "strategy_family": "bounded_arbitrage_graph",
+                    "conversion_costs": conversion_costs,
+                    "friction_chaos": friction,
+                    "expected_execution_time_hours": sum(float(edge["expected_execution_time_hours"]) * scale for edge, scale in zip(path, scales, strict=True)),
+                    "expected_sale_time_hours": sum(float(edge.get("expected_sale_time_hours", 0)) for edge in path),
+                    "max_batch": min(int(edge.get("max_batch", 1)) for edge in path),
+                    "manual_actions": [action for edge in path for action in edge.get("manual_actions", [])],
+                }
+                route = _deferred_route(
+                    synthetic,
+                    context,
+                    route_id=synthetic["id"],
+                    name=synthetic["name"],
+                    inputs=scaled_inputs,
+                    outputs=scaled_outputs,
+                    conversion_costs=conversion_costs,
+                    friction_chaos=friction,
+                )
+                if route:
+                    route.strategy_family = "bounded_arbitrage_graph"
+                    route.verification_metadata["graph_edges"] = [edge["id"] for edge in path]
+                    route.reasons.append(f"bounded graph route ({len(path)} transformation edge(s), maximum {self.max_edges})")
+                    routes.append(route)
+            if len(path) == self.max_edges:
+                return
+            current = path[-1]["outputs"][0]["item"] if path else None
+            for edge in edges:
+                if edge["id"] in visited:
+                    continue
+                if current is not None and edge["inputs"][0]["item"] != current:
+                    continue
+                # A node may not be revisited; this prevents currency cycles.
+                next_node = edge["outputs"][0]["item"]
+                if next_node in {item["inputs"][0]["item"] for item in path}:
+                    continue
+                walk(path + [edge], visited | {edge["id"]})
+
+        for edge in edges:
+            walk([edge], {edge["id"]})
+        return routes
+
+    def discover(self, context: Mapping[str, Any]) -> Sequence[InvestableOpportunity]:
+        return [route.to_investable(status="Validated", max_batch=max(1, int(route.capacity)),
+                                    bankroll=float(context.get("bankroll", 0) or 0),
+                                    chaos_per_divine=float(context.get("chaos_per_divine", 1) or 1))
+                for route in self.evaluate(context)
+                if route.expected_net_profit > 0 and route.status != "manual_only"]
+
+
+class DeterministicSixLinkStrategyProvider:
+    def __init__(self, registry: SixLinkRegistry) -> None:
+        self.registry = registry
+
+    def evaluate(self, context: Mapping[str, Any]) -> Sequence[ProfitRoute]:
+        requested = context.get("category")
+        routes = []
+        for record in self.registry.records():
+            if requested and requested not in {record.get("category", "SixLink"), "Transformation"}:
+                continue
+            if record["status"] in {StrategyLifecycle.REJECTED.value, StrategyLifecycle.DEPRECATED.value}:
+                continue
+            route = _deferred_route(context=context, record=record)
+            if route:
+                route.status = "manual_only"
+                route.execution_risk = max(route.execution_risk, 1.0)
+                route.reasons.append("manual-only six-link strategy; automatic allocation is disabled")
+                route.strategy_family = "deterministic_six_link"
+                route.category = record.get("category", "SixLink")
+                route.verification_metadata["linking_method"] = record["linking_method"]
+                routes.append(route)
+        return routes
+
+    def discover(self, context: Mapping[str, Any]) -> Sequence[InvestableOpportunity]:
+        return []
+
+
+class DeferredDeterministicStrategyProvider:
+    """Single integration point for §16–19; empty defaults keep unknown recipes closed."""
+
+    def __init__(
+        self,
+        assembly: AssemblyTransformationRegistry | None = None,
+        vendor: VendorTransformationRegistry | None = None,
+        six_link: SixLinkRegistry | None = None,
+    ) -> None:
+        self.assembly = assembly if assembly is not None else default_assembly_registry()
+        self.vendor = vendor if vendor is not None else default_vendor_registry()
+        self.six_link = six_link if six_link is not None else default_six_link_registry()
+
+    def evaluate(self, context: Mapping[str, Any]) -> Sequence[ProfitRoute]:
+        assembly = AssemblyStrategyProvider(self.assembly).evaluate(context)
+        vendor = VendorTransformationStrategyProvider(self.vendor).evaluate(context)
+        graph = ArbitrageGraphStrategyProvider((self.assembly, self.vendor), min_edges=2).evaluate(context)
+        six_link = DeterministicSixLinkStrategyProvider(self.six_link).evaluate(context)
+        return [*assembly, *vendor, *graph, *six_link]
+
+    def discover(self, context: Mapping[str, Any]) -> Sequence[InvestableOpportunity]:
+        definitions = [AssemblyStrategyProvider(self.assembly), VendorTransformationStrategyProvider(self.vendor),
+                       ArbitrageGraphStrategyProvider((self.assembly, self.vendor), min_edges=2),
+                       DeterministicSixLinkStrategyProvider(self.six_link)]
+        opportunities: list[InvestableOpportunity] = []
+        for provider in definitions:
+            opportunities.extend(provider.discover(context))
+        return opportunities
+
+
+def default_deferred_strategy_provider() -> DeferredDeterministicStrategyProvider:
+    return DeferredDeterministicStrategyProvider()
+
+
+DeterministicAssemblyRegistry = AssemblyTransformationRegistry
+DeterministicVendorRegistry = VendorTransformationRegistry
+DeterministicSixLinkRegistry = SixLinkRegistry
+DeterministicAssemblyStrategyProvider = AssemblyStrategyProvider
+VendorStrategyProvider = VendorTransformationStrategyProvider
+SixLinkStrategyProvider = DeterministicSixLinkStrategyProvider

@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { api, fmtPrice, fmtVol, fmtPct, fmtTime } from '../lib/helpers'
 import { LoadingState, EmptyState, ErrorState, ConfidenceBar, SignalBadge } from './ui'
 
-export function ExplorerTab({ leagues, categories, selectedLeague, setSelectedLeague }) {
+export function ExplorerTab({ categories, selectedLeague }) {
   const [selectedCategory, setSelectedCategory] = useState('Currency')
   const [items, setItems] = useState([])
   const [selectedItem, setSelectedItem] = useState('')
@@ -67,10 +67,8 @@ export function ExplorerTab({ leagues, categories, selectedLeague, setSelectedLe
       <div className="card !p-4">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div>
-            <label className="block text-sm font-medium text-dracula-comment mb-2">League</label>
-            <select value={selectedLeague} onChange={(e) => setSelectedLeague(e.target.value)} className="input w-full">
-              {leagues.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
-            </select>
+            <label className="block text-sm font-medium text-dracula-comment mb-2">Shared league</label>
+            <div className="input w-full" aria-label="Shared league">{selectedLeague || 'Choose shared league above'}</div>
           </div>
           <div>
             <label className="block text-sm font-medium text-dracula-comment mb-2">Category</label>

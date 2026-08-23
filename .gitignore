@@ -8,12 +8,15 @@ venv/
 # Node/Vite
 frontend/node_modules/
 frontend/dist/
+dist/
 
 # Local configuration and runtime state
 .env
 .env.*
 !.env.example
 .deuscfo.pids.json
+deuscfo.config.json
+logs/
 .omp/
 
 # Local market database and generated caches
@@ -22,9 +25,8 @@ frontend/dist/
 *.db-wal
 backend/cx_currency_map.json
 
-# Large/raw API research captures; keep the small offline metadata fallback
+# Large/raw API research captures remain ignored
 backend/api_research/*
-!backend/api_research/trade_data_static.json
 
 # Editors and OS files
 .vscode/
