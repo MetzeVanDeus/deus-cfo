@@ -58,7 +58,7 @@ Open <http://127.0.0.1:8000>. For development with Vite and hot reload, run `pyt
 
 ### Linux
 
-Linux runs natively from source; no Linux binary is published yet. Install Python 3.12, Node.js 20 or newer, npm, and Git, then run:
+Linux runs natively from source; no Linux binary is published yet. Install Python 3.12, Node.js 20 or newer, npm, and Git. Debian/Ubuntu also requires the `python3.12-venv` package for the virtual environment command below.
 
 ```bash
 git clone https://github.com/MetzeVanDeus/deus-cfo.git
