@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.3 — 2026-08-23
+
+- Added explicit packaged Windows download verification and native Windows/Linux source-run instructions.
+- Fixed Linux launcher npm resolution and documented the Debian/Ubuntu virtual-environment prerequisite.
+
 ## 0.1.2 — 2026-08-23
 
 - Redesigned the terminal visual layer with a brass-led command spine, regime rail, signal choreography, and a reduced-motion-aware Three.js oracle lens.
