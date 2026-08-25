@@ -566,6 +566,3 @@ def build_capital_plan(
         chaos_per_divine=chaos_per_divine,
         calibration_summary=calibration_summary,
     )
-
-allocate_capital = build_capital_plan
-bootstrap_portfolio = simulate_portfolio

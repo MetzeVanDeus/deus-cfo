@@ -10,6 +10,6 @@ DeusCFO is a local Path of Exile market research terminal for historical prices,
 
 ## Known limits
 
-The application does not execute gameplay or trades. Assembly, vendor, graph, six-link, and other unregistered strategy families remain unsupported. The Windows packaging script emits a SHA-256 checksum, but this repository does not claim a signed artifact, clean-machine verification, or a published release URL yet.
+The application does not execute gameplay or trades. Assembly, vendor, graph, six-link, and other unregistered strategy families remain unsupported. The Windows packaging script emits a SHA-256 checksum, but artifacts are not code-signed and clean-machine verification is not claimed.
 
 This product isn't affiliated with or endorsed by Grinding Gear Games in any way. Optional donations remain pending GGG guidance and are not part of this beta.

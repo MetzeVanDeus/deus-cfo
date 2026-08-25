@@ -40,6 +40,26 @@ jobs:
       - name: Run backend tests
         run: python -m pytest backend
 
+  windows:
+    name: Windows package build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "20"
+      - name: Build packaged service
+        shell: pwsh
+        run: ./scripts/build_windows.ps1
+      - name: Verify packaged artifact
+        shell: pwsh
+        run: |
+          if (-not (Test-Path dist/DeusCFO/DeusCFO.exe)) { throw "Packaged executable is missing" }
+          if (-not (Test-Path dist/DeusCFO/SHA256SUMS.txt)) { throw "Packaged checksum is missing" }
+
   frontend:
     name: Frontend build
     runs-on: ubuntu-latest

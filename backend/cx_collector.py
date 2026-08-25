@@ -128,6 +128,13 @@ def _parse_hour(data: dict, wanted_leagues: set[str]) -> tuple[str, list[dict]]:
         })
     return ts, records
 
+def _wanted_league_present(data: dict, wanted_leagues: set[str]) -> bool:
+    markets = data.get("markets") if isinstance(data, dict) else None
+    return isinstance(markets, list) and any(
+        isinstance(market, dict) and _resolve_league(market.get("league"), wanted_leagues) is not None
+        for market in markets
+    )
+
 
 async def store_cx_hour(data: dict, wanted_leagues: set[str]) -> int:
     """Parse a response and store its (filtered) markets. Returns entries stored."""
@@ -141,6 +148,9 @@ async def backfill_currency_exchange(max_hours: int = 168) -> int:
     Returns the number of hours processed.
     """
     wanted = await _fetch_leagues()
+    if not wanted:
+        log.warning("cx backfill: no current leagues available; refusing to advance cursor")
+        return 0
     change_id = _hour_cursor(max_hours)
     first_change_id = None
     first_hour = None
@@ -162,6 +172,9 @@ async def backfill_currency_exchange(max_hours: int = 168) -> int:
             ts, records = _parse_hour(data, wanted)
             if not ts:
                 log.error("cx backfill: malformed hour at change_id=%s", change_id)
+                break
+            if not _wanted_league_present(data, wanted) or not records:
+                log.warning("cx backfill: wanted league payload had no valid records at %s; retrying later", ncid)
                 break
             stored = await database.insert_cx_hour(records, ts) if records else 0
             if first_change_id is None:
@@ -187,6 +200,9 @@ async def backfill_currency_exchange(max_hours: int = 168) -> int:
 async def poll_latest_cx() -> int:
     """Fetch the latest completed currency-exchange hour."""
     wanted = await _fetch_leagues()
+    if not wanted:
+        log.warning("cx poll: no current leagues available; refusing to advance cursor")
+        return 0
     try:
         last = await database.get_cx_progress("default")
     except Exception:
@@ -213,6 +229,9 @@ async def poll_latest_cx() -> int:
         ts, records = _parse_hour(data, wanted)
         if not ts:
             log.error("cx poll: malformed hour")
+            return 0
+        if not _wanted_league_present(data, wanted) or not records:
+            log.warning("cx poll: wanted league payload had no valid records at %s; retrying later", ncid)
             return 0
         stored = await database.insert_cx_hour(records, ts) if records else 0
         await database.set_cx_progress("default", ncid, last_synced_hour=ts)

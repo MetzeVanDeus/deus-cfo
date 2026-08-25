@@ -1,25 +1,24 @@
 import { useState, useEffect, useMemo } from 'react'
 import { api, fmtPrice, fmtVol, fmtPct, fmtTime } from '../lib/helpers'
 import { LoadingState, EmptyState, ErrorState, ConfidenceBar, SignalBadge } from './ui'
-
-export function ExplorerTab({ categories, selectedLeague }) {
+export function ExplorerTab({ categories, selectedLeague, historyHours = 24 }) {
   const [selectedCategory, setSelectedCategory] = useState('Currency')
   const [items, setItems] = useState([])
   const [selectedItem, setSelectedItem] = useState('')
   const [loadingItems, setLoadingItems] = useState(false)
-
+  const [itemsError, setItemsError] = useState('')
   const [history, setHistory] = useState([])
   const [regime, setRegime] = useState(null)
   const [stats, setStats] = useState(null)
   const [itemData, setItemData] = useState(null)
   const [loadingDetail, setLoadingDetail] = useState(false)
   const [error, setError] = useState('')
-
   // Fetch items when category or league changes
   useEffect(() => {
     if (!selectedLeague || !selectedCategory) return
     let cancelled = false
     setLoadingItems(true)
+    setItemsError('')
     setSelectedItem('')
     setItems([])
     api.get('/market/overview', { params: { league: selectedLeague } }).then(r => {
@@ -27,17 +26,16 @@ export function ExplorerTab({ categories, selectedLeague }) {
       const catItems = r.data.categories?.[selectedCategory] || []
       setItems(catItems)
       setLoadingItems(false)
-    }).catch(() => { if (!cancelled) setLoadingItems(false) })
+    }).catch(() => { if (!cancelled) { setItemsError('Failed to load market items'); setLoadingItems(false) } })
     return () => { cancelled = true }
   }, [selectedLeague, selectedCategory])
-
   // Fetch detail when item selected
   useEffect(() => {
     if (!selectedLeague || !selectedCategory || !selectedItem) return
     let cancelled = false
     setLoadingDetail(true)
     setError('')
-    const params = { league: selectedLeague, category: selectedCategory, item_id: selectedItem, hours: 24 }
+    const params = { league: selectedLeague, category: selectedCategory, item_id: selectedItem, hours: historyHours }
     Promise.all([
       api.get('/history', { params }),
       api.get('/regime', { params }),
@@ -53,14 +51,11 @@ export function ExplorerTab({ categories, selectedLeague }) {
       setError('Failed to load item data')
       setLoadingDetail(false)
     })
-
     // Get item info from items list
     const found = items.find(i => i.item_id === selectedItem)
     setItemData(found || null)
-
     return () => { cancelled = true }
-  }, [selectedLeague, selectedCategory, selectedItem])
-
+  }, [selectedLeague, selectedCategory, selectedItem, historyHours])
   return (
     <div className="space-y-4">
       {/* Controls */}
@@ -86,14 +81,12 @@ export function ExplorerTab({ categories, selectedLeague }) {
           </div>
         </div>
       </div>
-
-      {!selectedItem && !loadingItems && (
-        <EmptyState icon="🔎" title="Select an Item" message="Choose a category and item above to see price history, regime, and statistics." />
+      {itemsError && !loadingItems && <ErrorState message={itemsError} onRetry={() => window.location.reload()} />}
+      {!selectedItem && !loadingItems && !itemsError && (
+        <EmptyState title="Select an Item" message="Choose a category and item above to see price history, regime, and statistics." />
       )}
-
       {loadingDetail && <LoadingState text="Loading item data..." />}
       {error && !loadingDetail && <ErrorState message={error} />}
-
       {selectedItem && !loadingDetail && !error && regime && stats && (
         <div className="space-y-4 animate-fade-in">
           {/* Top Row: Price + Regime */}
@@ -101,25 +94,21 @@ export function ExplorerTab({ categories, selectedLeague }) {
             <PriceCard history={history} itemData={itemData} />
             <RegimeCard regime={regime} />
           </div>
-
           {/* Statistics */}
           <StatsCard stats={stats} />
-
           {/* Price History Chart */}
-          <PriceChart history={history} />
+          <PriceChart history={history} historyHours={historyHours} />
         </div>
       )}
     </div>
   )
 }
-
 function PriceCard({ history, itemData }) {
   const prices = history.map(h => h.price).filter(p => p != null)
   const current = prices.length > 0 ? prices[prices.length - 1] : (itemData?.price_chaos ?? null)
   const first = prices.length > 1 ? prices[0] : current
   const changePct = first && current ? ((current - first) / first) * 100 : 0
   const isUp = changePct >= 0
-
   return (
     <div className="card">
       <h3 className="text-sm font-semibold text-dracula-comment uppercase tracking-wide mb-3">Current Price</h3>
@@ -129,7 +118,7 @@ function PriceCard({ history, itemData }) {
           <div className="text-sm text-dracula-comment">chaos</div>
         </div>
         <div className={`flex items-center gap-1 text-lg font-semibold mb-1 ${isUp ? 'text-dracula-green' : 'text-dracula-red'}`}>
-          <span>{isUp ? '▲' : '▼'}</span>
+          <span>{isUp ? '+' : '-'}</span>
           <span>{fmtPct(changePct)}</span>
         </div>
       </div>
@@ -141,7 +130,6 @@ function PriceCard({ history, itemData }) {
     </div>
   )
 }
-
 function RegimeCard({ regime }) {
   const conf = regime.confidence
   return (
@@ -175,7 +163,6 @@ function RegimeCard({ regime }) {
     </div>
   )
 }
-
 function StatsCard({ stats }) {
   const rows = [
     ['Mean', fmtPrice(stats.mean)],
@@ -203,8 +190,7 @@ function StatsCard({ stats }) {
     </div>
   )
 }
-
-function PriceChart({ history }) {
+function PriceChart({ history, historyHours = 24 }) {
   const points = useMemo(() => {
     if (!history || history.length === 0) return []
     // Sample to ~60 points max for performance
@@ -215,7 +201,6 @@ function PriceChart({ history }) {
     }
     return h
   }, [history])
-
   if (points.length === 0) {
     return (
       <div className="card">
@@ -224,40 +209,25 @@ function PriceChart({ history }) {
       </div>
     )
   }
-
   const prices = points.map(p => p.price)
   const min = Math.min(...prices)
   const max = Math.max(...prices)
   const range = max - min || 1
-  const W = 100 // percentage width per bar
-  const barW = W / points.length
-
   return (
     <div className="card">
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-sm font-semibold text-dracula-comment uppercase tracking-wide">Price History</h3>
-        <span className="text-xs text-dracula-comment">{points.length} data points · 24h</span>
+        <span className="text-xs text-dracula-comment">{points.length} data points · {historyHours}h</span>
       </div>
-
-      {/* Bar chart */}
-      <div className="flex items-end gap-px h-32 mb-2" style={{ minHeight: '8rem' }}>
-        {points.map((p, i) => {
-          const heightPct = ((p.price - min) / range) * 100
-          const isLast = i === points.length - 1
-          return (
-            <div key={i}
-              className={`flex-1 rounded-t transition-all duration-200 ${isLast ? 'bg-dracula-purple' : 'bg-dracula-cyan/40 hover:bg-dracula-cyan/70'}`}
-              style={{ height: `${Math.max(heightPct, 2)}%` }}
-              title={`${fmtPrice(p.price)}c · ${fmtTime(p.timestamp)}`}
-            />
-          )
-        })}
-      </div>
-
+      <svg className="price-chart" viewBox="0 0 600 140" role="img" aria-label="Price history line chart">{(() => { const coords = points.map((p, i) => `${(i / Math.max(1, points.length - 1)) * 590 + 5},${130 - ((p.price - min) / range) * 115}`); return <><polyline fill="none" stroke="var(--brass-bright)" strokeWidth="2" points={coords.join(' ')} />{coords.map((point, i) => <circle key={i} cx={point.split(',')[0]} cy={point.split(',')[1]} r="3" fill="var(--brass-bright)"><title>{`${fmtPrice(points[i].price)}c · ${fmtTime(points[i].timestamp)}`}</title></circle>)}</> })()}</svg>
       {/* Axis labels */}
       <div className="flex justify-between text-xs text-dracula-comment font-mono">
         <span>{fmtPrice(min)}c</span>
         <span>{fmtPrice(max)}c</span>
+      </div>
+      <div className="flex justify-between text-xs text-dracula-comment">
+        <span>{fmtTime(points[0].timestamp)}</span>
+        <span>{fmtTime(points.at(-1).timestamp)}</span>
       </div>
     </div>
   )

@@ -33,3 +33,6 @@ backend/api_research/*
 .idea/
 .DS_Store
 Thumbs.db
+
+# Local working notes
+NOTES.local.md

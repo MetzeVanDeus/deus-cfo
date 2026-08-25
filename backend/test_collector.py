@@ -34,7 +34,7 @@ def test_collector_uses_api_type_keys_and_blocks_stash_history(monkeypatch):
 
         async def get(self, url, params):
             requests.append((url, params.copy()))
-            if params["type"] == "Scarab":
+            if params["type"] == collector._EXCHANGE_TYPES["Scarab"]:
                 return Response([{"id": "ambush-scarab", "primaryValue": 5, "volumePrimaryValue": 100}])
             return Response([{
                 "id": 123,
@@ -56,7 +56,7 @@ def test_collector_uses_api_type_keys_and_blocks_stash_history(monkeypatch):
     with pytest.raises(ValueError, match="disabled"):
         asyncio.run(collector.collect_snapshot("Allflame", "SkillGem"))
 
-    assert requests[0][1]["type"] == "Scarab"
+    assert requests[0][1]["type"] == collector._EXCHANGE_TYPES["Scarab"]
     assert inserted[0]["item_id"] == "ambush-scarab"
     assert collector.stash_item_id({
         "id": 123, "detailsId": "awakened-empower-support-4"
@@ -80,7 +80,7 @@ def test_required_unique_reward_category_is_persisted(monkeypatch):
         async def __aexit__(self, *_):
             return None
         async def get(self, _url, params):
-            assert params["type"] == "UniqueAccessory"
+            assert params["type"] == collector._STASH_TYPES["UniqueAccessory"]
             return Response()
 
     async def insert(records, timestamp=None):
@@ -136,7 +136,7 @@ def test_no_sparkline_backfill_in_persisted_snapshots(monkeypatch):
 def test_category_sweep_uses_one_timestamp(monkeypatch):
     timestamps = []
 
-    async def collect(_league, _category, _exchange, _stash, timestamp):
+    async def collect(_league, _category, _exchange, _stash, timestamp, **_kwargs):
         timestamps.append(timestamp)
         return 1
 
@@ -205,3 +205,34 @@ def test_snapshot_skips_malformed_rows_without_losing_valid_rows(monkeypatch):
 
     assert asyncio.run(collector.collect_snapshot("Allflame", "Currency")) == 1
     assert inserted[0]["item_id"] == "chaos"
+
+def test_category_sweep_reuses_one_http_client(monkeypatch):
+    clients = []
+    seen = []
+
+    class Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return None
+
+    def make_client(**_kwargs):
+        client = Client()
+        clients.append(client)
+        return client
+
+    async def collect(_league, _category, _exchange, _stash, _timestamp, client):
+        seen.append(client)
+        return 1
+
+    async def prune(_categories, **_kwargs):
+        return {}
+
+    monkeypatch.setattr(collector.httpx, "AsyncClient", make_client)
+    monkeypatch.setattr(collector, "_collect_snapshot", collect)
+    monkeypatch.setattr(collector.database, "prune_market_data", prune)
+    results = asyncio.run(collector.collect_all_categories("Allflame"))
+    assert len(results) == len(collector._COLLECTION_TYPES)
+    assert clients == [seen[0]]
+    assert len(set(map(id, seen))) == 1

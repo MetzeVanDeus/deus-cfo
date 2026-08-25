@@ -238,9 +238,6 @@ def normalize_opportunity(
     )
 
 
-adapt_opportunity = normalize_opportunity
-
-
 # --- Factory functions ---
 
 async def regime_to_opportunity(regime_data: dict, league: str) -> Opportunity:

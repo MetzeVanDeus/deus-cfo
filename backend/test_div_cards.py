@@ -496,6 +496,10 @@ def test_trade_depth_collector_persists_adapter_quotes(monkeypatch, tmp_path):
         return quotes, latest
 
     monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "trade-depth.db"))
+    monkeypatch.setattr(
+        collector.market_data, "resolve_chaos_per_divine",
+        lambda _league: asyncio.sleep(0, result=10),
+    )
     monkeypatch.setattr(strategies, "default_div_card_registry", lambda: DivCardRegistry([recipe()], version="3.0", source="test"))
     quotes, latest = asyncio.run(run())
     assert set(quotes) == {"DivinationCard:test-card", "Currency:test-orb"}

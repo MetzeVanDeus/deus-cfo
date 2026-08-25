@@ -9,4 +9,4 @@ export function SourceBadge({ source }) { return <span className="badge">{source
 export function ConfidenceBar({ score }) { const pct = Math.round((score || 0) * 100); return <span className="compact-confidence">{pct}%</span> }
 export function LoadingState({ text = 'Loading...' }) { return <div className="loading-state"><span className="spinner" /><span>{text}</span></div> }
 export function EmptyState({ title, message }) { return <div className="empty-state"><div className="eyebrow">NO DATA</div><h3>{title}</h3><p>{message}</p></div> }
-export function ErrorState({ message }) { return <div className="error-state">{message}</div> }
+export function ErrorState({ message, onRetry }) { return <div className="error-state" role="alert">{message}{onRetry && <button className="text-button" onClick={onRetry}>RETRY</button>}</div> }

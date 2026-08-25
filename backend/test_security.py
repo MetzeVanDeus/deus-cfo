@@ -125,3 +125,43 @@ def test_packaged_frontend_confines_assets(monkeypatch, tmp_path, client):
     assert client.get("/assets/app.js", headers=headers).text == "safe"
     assert client.get("/assets/%2e%2e/secret.txt", headers=headers).status_code == 404
     assert client.get("/dashboard", headers=headers).text == "app shell"
+
+def test_flips_validate_budget_and_normalize_nullable_market_fields(monkeypatch, client):
+    headers = local_headers()
+    session = client.get("/api/session", headers=headers).json()["token"]
+    protected = {**headers, "X-DeusCFO-Token": session}
+
+    invalid = client.post(
+        "/api/flips",
+        json={"budgetCurrency": "chaos", "budgetAmount": 0, "leagueId": "Allflame", "category": "SkillGem"},
+        headers=protected,
+    )
+    assert invalid.status_code == 422
+
+    async def fetch_stash(_client, _league, _category):
+        return [{
+            "detailsId": "test-item",
+            "name": None,
+            "icon": None,
+            "variant": None,
+            "chaosValue": 5,
+            "listingCount": 100,
+            "sparkLine": {"totalChange": 2, "data": [0, 2, None]},
+        }]
+
+    async def fetch_exchange(_client, _league, _category):
+        return [{"id": "chaos", "primaryValue": 1}]
+
+    monkeypatch.setattr(main, "_fetch_stash", fetch_stash)
+    monkeypatch.setattr(main, "_fetch_exchange", fetch_exchange)
+    response = client.post(
+        "/api/flips",
+        json={"budgetCurrency": "chaos", "budgetAmount": 10, "leagueId": "Allflame", "category": "SkillGem"},
+        headers=protected,
+    )
+    assert response.status_code == 200
+    result = response.json()[0]
+    assert result["name"] == "Unknown"
+    assert result["icon"] == ""
+    assert result["variant"] == ""
+    assert result["sparkline"] == [0.0, 2.0, None]
