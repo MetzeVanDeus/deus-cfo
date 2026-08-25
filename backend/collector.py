@@ -12,6 +12,7 @@ import httpx
 
 import cx_collector
 import database
+import market_data
 
 log = logging.getLogger("deuscfo.collector")
 
@@ -28,26 +29,10 @@ TRADE_USER_AGENT_ENV = "DEUSCFO_TRADE_USER_AGENT"
 TRADE_FEE_ENV = "DEUSCFO_TRADE_FEE_RATE"
 CONFIG_PATH = Path(os.environ["DEUSCFO_CONFIG_PATH"]) if os.environ.get("DEUSCFO_CONFIG_PATH") else Path(__file__).resolve().parent.parent / "deuscfo.config.json"
 
-# poe.ninja 'type' param per category (same mapping as main.py)
-_EXCHANGE_TYPES = {
-    category: category
-    for category in (
-        "Currency", "Fragment", "Scarab", "Essence", "Oil", "Fossil",
-        "DeliriumOrb", "DivinationCard",
-    )
-}
-_STASH_TYPES = {
-    category: category
-    for category in (
-        "SkillGem", "UniqueWeapon", "UniqueArmour", "UniqueAccessory",
-        "UniqueJewel", "UniqueFlask", "Map", "BlightedMap", "UniqueMap",
-    )
-}
-_COLLECTION_TYPES = {
-    **_EXCHANGE_TYPES,
-    # Deterministic div-card rewards need a real stash-backed price.
-    "UniqueAccessory": "UniqueAccessory",
-}
+# Shared category ids and poe.ninja API type values.
+_EXCHANGE_TYPES = market_data.EXCHANGE_TYPES
+_STASH_TYPES = market_data.STASH_TYPES
+_COLLECTION_TYPES = market_data.COLLECTION_TYPES
 
 
 def trade_depth_enabled() -> bool:
@@ -103,14 +88,6 @@ def _trade_headers() -> dict[str, str]:
 PERSISTED_CATEGORIES = frozenset(_COLLECTION_TYPES)
 
 
-def _format_slug(slug: str) -> str:
-    """Turn 'abyss-scarab-of-descending' into 'Abyss Scarab of Descending'."""
-    parts = slug.replace("_", "-").split("-")
-    small = {"of", "the", "a", "an", "and", "or", "in", "on", "to", "for"}
-    return " ".join(
-        w.lower() if (w.lower() in small and i > 0) else w.capitalize()
-        for i, w in enumerate(parts)
-    )
 
 
 def stash_item_id(line: dict) -> str:
@@ -133,7 +110,7 @@ def _normalize(line: dict, league: str, category: str, is_exchange: bool) -> dic
         return None
     if is_exchange:
         item_id = line.get("id", "")
-        item_name = _format_slug(item_id) if isinstance(item_id, str) else ""
+        item_name = market_data.format_slug(item_id) if isinstance(item_id, str) else ""
         price = _finite_number(line.get("primaryValue"), 0)
         volume = _finite_number(line.get("volumePrimaryValue"), 0)
         record = {
@@ -334,22 +311,6 @@ def _quote_snapshot(key: str, name: str, quote: dict, *, league: str) -> dict | 
     }
 
 
-async def _stored_chaos_per_divine(league: str) -> float:
-    db = await database.get_db()
-    try:
-        cursor = await db.execute(
-            """SELECT price_chaos FROM snapshots
-               WHERE league = ? AND category = 'Currency'
-                 AND (item_id = 'divine' OR item_name = 'Divine Orb')
-               ORDER BY timestamp DESC LIMIT 1""",
-            (league,),
-        )
-        row = await cursor.fetchone()
-        value = row["price_chaos"] if row else 0
-        return float(value) if isinstance(value, (int, float)) and value > 0 else 0.0
-    finally:
-        await db.close()
-
 
 async def collect_trade_depth(
     league: str,
@@ -364,7 +325,7 @@ async def collect_trade_depth(
     quotes = await (adapter or TradeDepthAdapter()).collect(
         league,
         list(registry.records()),
-        chaos_per_divine=await _stored_chaos_per_divine(league),
+        chaos_per_divine=await market_data.resolve_chaos_per_divine(league),
     )
     names = {}
     for recipe in registry.records():
@@ -381,7 +342,6 @@ async def collect_trade_depth(
     if records:
         await database.insert_snapshots(records, timestamp=timestamp)
     return quotes
-
 
 
 async def _collect_normalized(league: str, category: str) -> list[dict]:
@@ -410,26 +370,22 @@ async def _collect_normalized(league: str, category: str) -> list[dict]:
 
 
 
-async def collect_snapshot(league: str, category: str, exchange_types=None,
-                           stash_types=None, timestamp: str | None = None) -> int:
-    """Fetch one persisted category for a league and store it as direct observations."""
-    if category not in PERSISTED_CATEGORIES:
-        raise ValueError(f"Historical snapshots are disabled for high-cardinality category '{category}'")
-    exchange_types = exchange_types or _EXCHANGE_TYPES
-    stash_types = stash_types or _STASH_TYPES
+async def _collect_snapshot(
+    league: str, category: str, exchange_types: dict, stash_types: dict,
+    timestamp: str | None, client: httpx.AsyncClient,
+) -> int:
     is_exchange = category in exchange_types
     url = EXCHANGE_URL if is_exchange else STASH_URL
     api_type = exchange_types[category] if is_exchange else stash_types[category]
-    async with httpx.AsyncClient(timeout=20.0) as client:
-        resp = await client.get(url, params={"league": league, "type": api_type})
-        if resp.status_code != 200:
-            log.error("collect %s/%s: HTTP %s", league, category, resp.status_code)
-            return 0
-        try:
-            data = resp.json()
-        except (TypeError, ValueError):
-            log.error("collect %s/%s: invalid JSON response", league, category)
-            return 0
+    resp = await client.get(url, params={"league": league, "type": api_type})
+    if resp.status_code != 200:
+        log.error("collect %s/%s: HTTP %s", league, category, resp.status_code)
+        return 0
+    try:
+        data = resp.json()
+    except (TypeError, ValueError):
+        log.error("collect %s/%s: invalid JSON response", league, category)
+        return 0
     timestamp = timestamp or database.now_iso()
     records = _snapshot_records(data, league, category, is_exchange)
     if records is None:
@@ -438,6 +394,20 @@ async def collect_snapshot(league: str, category: str, exchange_types=None,
     stored = await database.insert_snapshots(records, timestamp)
     log.info("Stored %d snapshots for %s / %s", stored, league, category)
     return stored
+
+
+async def collect_snapshot(league: str, category: str, exchange_types=None,
+                           stash_types=None, timestamp: str | None = None,
+                           *, client: httpx.AsyncClient | None = None) -> int:
+    """Fetch one persisted category and optionally reuse an existing client."""
+    if category not in PERSISTED_CATEGORIES:
+        raise ValueError(f"Historical snapshots are disabled for high-cardinality category '{category}'")
+    exchange_types = exchange_types or _EXCHANGE_TYPES
+    stash_types = stash_types or _STASH_TYPES
+    if client is not None:
+        return await _collect_snapshot(league, category, exchange_types, stash_types, timestamp, client)
+    async with httpx.AsyncClient(timeout=20.0) as owned_client:
+        return await _collect_snapshot(league, category, exchange_types, stash_types, timestamp, owned_client)
 
 
 async def collect_all_categories(league: str) -> dict[str, int]:
@@ -457,14 +427,15 @@ async def collect_all_categories(league: str) -> dict[str, int]:
         return {category: 0 for category in _COLLECTION_TYPES}
     results = {}
     timestamp = database.now_iso()
-    for category in _COLLECTION_TYPES:
-        try:
-            results[category] = await collect_snapshot(
-                league, category, _EXCHANGE_TYPES, _STASH_TYPES, timestamp
-            )
-        except Exception:
-            log.exception("Failed to collect %s / %s", league, category)
-            results[category] = 0
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        for category in _COLLECTION_TYPES:
+            try:
+                results[category] = await collect_snapshot(
+                    league, category, _EXCHANGE_TYPES, _STASH_TYPES, timestamp, client=client
+                )
+            except Exception:
+                log.exception("Failed to collect %s / %s", league, category)
+                results[category] = 0
     if trade_depth_enabled():
         try:
             results["trade_depth"] = len(

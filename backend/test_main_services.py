@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 
 import database
 import main
+import pytest
 
 
 def run(coro):
@@ -193,3 +194,48 @@ def test_transformation_routes_are_explicitly_observe_only():
     assert evaluated["auto_execution"] is False
     assert all(item["tier"] == "WATCH" or item["strategy_status"] == "Experimental"
                for item in evaluated["opportunities"])
+
+@pytest.mark.parametrize("amount", [0, -1, float("nan"), float("inf")])
+def test_flip_request_rejects_nonpositive_or_nonfinite_budget(amount):
+    with pytest.raises(ValueError):
+        main.FlipRequest(
+            budgetCurrency="chaos", budgetAmount=amount, leagueId="Allflame", category="Currency"
+        )
+    with pytest.raises(ValueError):
+        main.FlipRequest(
+            budgetCurrency="chaos", budgetAmount=1, leagueId="", category="Currency"
+        )
+
+
+def test_flip_request_reuses_one_http_client(monkeypatch):
+    clients = []
+
+    class Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return None
+
+    def make_client(**_kwargs):
+        client = Client()
+        clients.append(client)
+        return client
+
+    async def fetch_stash(_client, _league, _category):
+        return [{
+            "detailsId": "test-item", "name": "Test Item", "chaosValue": 5,
+            "listingCount": 100, "sparkLine": {"totalChange": 2, "data": [0, 2, 0]},
+        }]
+
+    async def fetch_exchange(_client, _league, _category):
+        return [{"id": "chaos", "primaryValue": 1}]
+
+    monkeypatch.setattr(main.httpx, "AsyncClient", make_client)
+    monkeypatch.setattr(main, "_fetch_stash", fetch_stash)
+    monkeypatch.setattr(main, "_fetch_exchange", fetch_exchange)
+    result = run(main.find_flips(main.FlipRequest(
+        budgetCurrency="chaos", budgetAmount=10, leagueId="Allflame", category="SkillGem"
+    )))
+    assert result and result[0]["itemId"] == "test-item"
+    assert len(clients) == 1

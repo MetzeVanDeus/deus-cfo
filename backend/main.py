@@ -143,31 +143,10 @@ async def require_local_session(request: Request) -> None:
 
 POE_NINJA_BASE = "https://poe.ninja"
 
-# Categories served by each endpoint family
-EXCHANGE_TYPES = {
-    "Currency": "Currency",
-    "Fragment": "Fragments",
-    "Scarab": "Scarabs",
-    "Essence": "Essences",
-    "Oil": "Oils",
-    "Fossil": "Fossils",
-    "DeliriumOrb": "Delirium Orbs",
-    "DivinationCard": "Divination Cards",
-}
-
-STASH_TYPES = {
-    "SkillGem": "Skill Gems",
-    "UniqueWeapon": "Unique Weapons",
-    "UniqueArmour": "Unique Armours",
-    "UniqueAccessory": "Unique Accessories",
-    "UniqueJewel": "Unique Jewels",
-    "UniqueFlask": "Unique Flasks",
-    "Map": "Maps",
-    "BlightedMap": "Blighted Maps",
-    "UniqueMap": "Unique Maps",
-}
-
-ALL_CATEGORIES = {**EXCHANGE_TYPES, **STASH_TYPES}
+# Shared category ids and poe.ninja API type values.
+EXCHANGE_TYPES = market_data.EXCHANGE_TYPES
+STASH_TYPES = market_data.STASH_TYPES
+ALL_CATEGORIES = market_data.ALL_CATEGORIES
 
 
 class LeagueResponse(BaseModel):
@@ -177,8 +156,8 @@ class LeagueResponse(BaseModel):
 
 class FlipRequest(BaseModel):
     budgetCurrency: str   # "chaos" or "divine"
-    budgetAmount: float
-    leagueId: str
+    budgetAmount: float = Field(gt=0, allow_inf_nan=False)
+    leagueId: str = Field(min_length=1)
     category: str         # e.g. "Currency", "Scarab", "SkillGem"
 
 
@@ -195,7 +174,7 @@ class FlipResult(BaseModel):
     monotonicDecline: bool # True if price only ever fell (death-trap flag)
     volume: float
     totalChange: float
-    sparkline: list
+    sparkline: list[float | None]
 
 
 @app.get("/api/leagues")
@@ -254,14 +233,6 @@ async def get_categories():
     ]
 
 
-def _format_slug(slug: str) -> str:
-    """Turn 'abyss-scarab-of-descending' into 'Abyss Scarab of Descending'."""
-    parts = slug.replace("_", "-").split("-")
-    small = {"of", "the", "a", "an", "and", "or", "in", "on", "to", "for"}
-    return " ".join(
-        w.lower() if (w.lower() in small and i > 0) else w.capitalize()
-        for i, w in enumerate(parts)
-    )
 
 
 def _compute_flip_signals(spark_data, volume):
@@ -330,7 +301,7 @@ async def _fetch_stash(client, league, category_type):
     return data.get("lines", [])
 
 
-@app.post("/api/flips", dependencies=[Depends(require_local_session)])
+@app.post("/api/flips", response_model=list[FlipResult], dependencies=[Depends(require_local_session)])
 async def find_flips(request: FlipRequest):
     category = request.category
     if category not in ALL_CATEGORIES:
@@ -342,50 +313,65 @@ async def find_flips(request: FlipRequest):
         else:
             lines = await _fetch_stash(client, request.leagueId, category)
 
-    # Resolve the budget currency's price in chaos
-    budget_price = None
-    if category in EXCHANGE_TYPES:
-        for line in lines:
-            if line.get("id") == request.budgetCurrency:
-                budget_price = line.get("primaryValue")
-                break
-    if budget_price is None:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        # Resolve the budget currency's price in chaos using this request's client.
+        budget_price = None
+        if category in EXCHANGE_TYPES:
+            for line in lines:
+                if isinstance(line, dict) and line.get("id") == request.budgetCurrency:
+                    budget_price = collector._finite_number(line.get("primaryValue"))
+                    if budget_price is not None:
+                        break
+        if budget_price is None:
             curr_lines = await _fetch_exchange(client, request.leagueId, "Currency")
             for line in curr_lines:
-                if line.get("id") == request.budgetCurrency:
-                    budget_price = line.get("primaryValue")
-                    break
+                if isinstance(line, dict) and line.get("id") == request.budgetCurrency:
+                    budget_price = collector._finite_number(line.get("primaryValue"))
+                    if budget_price is not None:
+                        break
+
     if budget_price is None or budget_price <= 0:
         raise HTTPException(status_code=400, detail=f"Cannot resolve budget currency '{request.budgetCurrency}'")
 
     budget_total_chaos = request.budgetAmount * budget_price
     results = []
-
     for line in lines:
+        if not isinstance(line, dict):
+            continue
         if category in EXCHANGE_TYPES:
-            item_id = line.get("id", "")
-            name = _format_slug(item_id)
+            item_id = line.get("id")
+            if not isinstance(item_id, str) or not item_id:
+                continue
+            name = market_data.format_slug(item_id)
             icon = ""
             variant = ""
-            price_chaos = line.get("primaryValue", 0)
-            volume = line.get("volumePrimaryValue", 0)
-            spark = line.get("sparkline", {})
+            price_chaos = collector._finite_number(line.get("primaryValue"), 0)
+            volume = collector._finite_number(line.get("volumePrimaryValue"), 0)
+            spark = line.get("sparkline")
         else:
             item_id = collector.stash_item_id(line)
-            name = line.get("name", "Unknown")
-            icon = line.get("icon", "")
-            variant = line.get("variant", "")
-            price_chaos = line.get("chaosValue", 0)
-            volume = line.get("listingCount", 0) or line.get("count", 0)
-            spark = line.get("sparkLine", {})
-
-        total_change = spark.get("totalChange", 0) if spark else 0
-        spark_data = spark.get("data", []) if spark else []
+            name = line.get("name") if isinstance(line.get("name"), str) else "Unknown"
+            icon = line.get("icon") if isinstance(line.get("icon"), str) else ""
+            variant = line.get("variant") if isinstance(line.get("variant"), str) else ""
+            price_chaos = collector._finite_number(line.get("chaosValue"), 0)
+            volume = collector._finite_number(line.get("listingCount") or line.get("count"), 0)
+            spark = line.get("sparkLine")
+        if price_chaos is None or volume is None:
+            continue
+        spark = spark if isinstance(spark, dict) else {}
+        raw_sparkline = spark.get("data") if isinstance(spark.get("data"), list) else []
+        sparkline = [
+            float(value)
+            if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value))
+            else None
+            for value in raw_sparkline
+        ]
+        spark_data = [value for value in sparkline if value is not None]
+        total_change = collector._finite_number(spark.get("totalChange"), 0)
+        if total_change is None:
+            total_change = 0
 
         if price_chaos <= 0 or price_chaos > budget_total_chaos:
             continue
-
         dip, swing_pct, mono, liq = _compute_flip_signals(spark_data, volume)
         if dip <= 0 and liq <= 0:
             continue  # no usable signal
@@ -407,7 +393,7 @@ async def find_flips(request: FlipRequest):
             "monotonicDecline": mono,
             "volume": round(volume, 0),
             "totalChange": round(total_change, 2),
-            "sparkline": spark_data,
+            "sparkline": sparkline,
         })
     # swing and liquidity are min-max normalized within the cohort so the
     # ranking is discriminative instead of saturating at the top of the scale.
@@ -566,19 +552,8 @@ async def get_opportunities(
     }
 
 async def _resolve_chaos_per_divine(league: str) -> float | None:
-    """Resolve the current Divine rate from the stored/current Currency feed."""
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            lines = await _fetch_exchange(client, league, "Currency")
-    except Exception:
-        log.exception("currency resolution failed for %s", league)
-        return None
-    for line in lines:
-        if str(line.get("id", "")).casefold() == "divine":
-            value = line.get("primaryValue")
-            if isinstance(value, (int, float)) and value > 0:
-                return float(value)
-    return None
+    """Resolve the Divine rate through the shared market-data contract."""
+    return await market_data.resolve_chaos_per_divine(league)
 class CapitalPlanRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

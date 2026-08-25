@@ -15,7 +15,7 @@ def _install(monkeypatch, records, stored, ncid=2):
         return 1
 
     async def fetch(_change_id):
-        return {"next_change_id": ncid}
+        return {"next_change_id": ncid, "markets": [{"league": "Allflame"}]}
 
     async def insert(_records, _timestamp):
         return stored
@@ -57,7 +57,7 @@ def test_backfill_starts_at_requested_recent_window(monkeypatch):
 
     async def fetch(change_id):
         fetched.append(change_id)
-        return {"next_change_id": change_id + 3600}
+        return {"next_change_id": change_id + 3600, "markets": [{"league": "Allflame"}]}
 
     monkeypatch.setattr(cx_collector, "_hour_cursor", lambda hours_ago=0: 10_000 - hours_ago * 3600)
     monkeypatch.setattr(cx_collector, "fetch_currency_exchange", fetch)
@@ -74,11 +74,67 @@ def test_backfill_stops_at_current_hour(monkeypatch):
     assert progress == []
 
 
-def test_empty_hour_can_advance_progress(monkeypatch):
+def test_empty_hour_does_not_advance_progress(monkeypatch):
     progress, _ = _install(monkeypatch, [], stored=0)
     assert asyncio.run(cx_collector.poll_latest_cx()) == 0
-    assert progress == [2]
+    assert progress == []
 
+
+def test_backfill_retries_wanted_empty_hour_without_advancing(monkeypatch):
+    progress, _ = _install(monkeypatch, [], stored=0)
+
+    async def fetch(_change_id):
+        return {"next_change_id": 2, "markets": [{"league": "Allflame"}]}
+
+    monkeypatch.setattr(cx_collector, "fetch_currency_exchange", fetch)
+    assert asyncio.run(cx_collector.backfill_currency_exchange(max_hours=1)) == 0
+    assert progress == []
+
+
+def test_poll_retries_wanted_empty_hour_without_advancing(monkeypatch):
+    progress, _ = _install(monkeypatch, [], stored=0)
+
+    async def fetch(_change_id):
+        return {"next_change_id": 2, "markets": [{"league": "Allflame"}]}
+
+    monkeypatch.setattr(cx_collector, "fetch_currency_exchange", fetch)
+    assert asyncio.run(cx_collector.poll_latest_cx()) == 0
+    assert progress == []
+
+def test_backfill_does_not_advance_when_league_discovery_is_empty(monkeypatch):
+    progress, _ = _install(monkeypatch, [{"market": 1}], stored=1)
+    monkeypatch.setattr(cx_collector, "_fetch_leagues", lambda: asyncio.sleep(0, result=set()))
+    assert asyncio.run(cx_collector.backfill_currency_exchange(max_hours=1)) == 0
+    assert progress == []
+
+
+def test_poll_does_not_advance_when_league_discovery_is_empty(monkeypatch):
+    progress, _ = _install(monkeypatch, [{"market": 1}], stored=1)
+    monkeypatch.setattr(cx_collector, "_fetch_leagues", lambda: asyncio.sleep(0, result=set()))
+    assert asyncio.run(cx_collector.poll_latest_cx()) == 0
+    assert progress == []
+
+
+def test_backfill_does_not_advance_when_wanted_leagues_vanish(monkeypatch):
+    progress, _ = _install(monkeypatch, [{"market": 1}], stored=1)
+
+    async def fetch(_change_id):
+        return {"next_change_id": 2, "markets": [{"league": "OtherLeague"}]}
+
+    monkeypatch.setattr(cx_collector, "fetch_currency_exchange", fetch)
+    assert asyncio.run(cx_collector.backfill_currency_exchange(max_hours=1)) == 0
+    assert progress == []
+
+
+def test_poll_does_not_advance_when_wanted_leagues_vanish(monkeypatch):
+    progress, _ = _install(monkeypatch, [{"market": 1}], stored=1)
+
+    async def fetch(_change_id):
+        return {"next_change_id": 2, "markets": [{"league": "OtherLeague"}]}
+
+    monkeypatch.setattr(cx_collector, "fetch_currency_exchange", fetch)
+    assert asyncio.run(cx_collector.poll_latest_cx()) == 0
+    assert progress == []
 
 def test_poll_stores_cursor_metadata(monkeypatch):
     _, set_calls = _install(monkeypatch, [{"market": 1}], stored=1)

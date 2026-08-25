@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react'
+import { useState } from 'react'
 import { api } from '../lib/helpers'
 
 export function FlipFinder({ categories, selectedLeague }) {
@@ -11,7 +11,7 @@ export function FlipFinder({ categories, selectedLeague }) {
   const [showResults, setShowResults] = useState(false)
 
   const handleSearch = async () => {
-    if (!selectedLeague || !budgetCurrency || !budgetAmount) {
+    if (!selectedLeague || !budgetCurrency || !budgetAmount || !Number.isFinite(Number(budgetAmount)) || Number(budgetAmount) <= 0) {
       setError('Please fill in all fields')
       return
     }
@@ -80,7 +80,7 @@ export function FlipFinder({ categories, selectedLeague }) {
           <div>
             <label className="block text-sm font-medium text-dracula-comment mb-2">Budget Amount</label>
             <input type="number" value={budgetAmount} onChange={(e) => setBudgetAmount(e.target.value)}
-              className="input w-full" min="0" step="0.01" placeholder="10" />
+              className="input w-full" min="0.01" step="0.01" placeholder="10" />
           </div>
 
           <div className="flex items-end">
@@ -115,7 +115,7 @@ export function FlipFinder({ categories, selectedLeague }) {
                 <div className={`text-2xl font-bold ${scoreColor(bestScore)}`}>
                   {bestScore.toFixed(0)}<span className="text-base text-dracula-comment">/100</span>
                 </div>
-                <div className="text-sm text-dracula-comment">Top Flip Score</div>
+                <div className="text-sm text-dracula-comment">Top Flip Score (/100)</div>
               </div>
             </div>
           </div>
@@ -127,7 +127,7 @@ export function FlipFinder({ categories, selectedLeague }) {
                   <tr className="border-b border-dracula-current/50">
                     <th className="text-left py-3 px-4 text-sm font-semibold text-dracula-comment">Item</th>
                     <th className="text-right py-3 px-4 text-sm font-semibold text-dracula-comment">Price</th>
-                    <th className="text-center py-3 px-4 text-sm font-semibold text-dracula-comment">Flip Score</th>
+                    <th className="text-center py-3 px-4 text-sm font-semibold text-dracula-comment">Flip Score (/100)</th>
                     <th className="text-right py-3 px-4 text-sm font-semibold text-dracula-comment">Dip from Peak</th>
                     <th className="text-right py-3 px-4 text-sm font-semibold text-dracula-comment">Swing</th>
                     <th className="text-right py-3 px-4 text-sm font-semibold text-dracula-comment">Volume</th>

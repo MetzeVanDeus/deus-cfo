@@ -1,14 +1,102 @@
 """Historical market data queries over the snapshots table."""
 
+import logging
+import math
 import statistics
 from datetime import datetime, timedelta, timezone
 
+import httpx
+
 import database
+
+log = logging.getLogger("deuscfo.market_data")
+
+POE_NINJA_BASE = "https://poe.ninja"
+EXCHANGE_URL = f"{POE_NINJA_BASE}/poe1/api/economy/exchange/current/overview"
+
+# Category ids and poe.ninja API type values are one contract shared by the API
+# and collector.  Keeping the endpoint mapping here prevents drift between them.
+EXCHANGE_TYPES = {
+    "Currency": "Currency",
+    "Fragment": "Fragments",
+    "Scarab": "Scarabs",
+    "Essence": "Essences",
+    "Oil": "Oils",
+    "Fossil": "Fossils",
+    "DeliriumOrb": "Delirium Orbs",
+    "DivinationCard": "Divination Cards",
+}
+STASH_TYPES = {
+    "SkillGem": "Skill Gems",
+    "UniqueWeapon": "Unique Weapons",
+    "UniqueArmour": "Unique Armours",
+    "UniqueAccessory": "Unique Accessories",
+    "UniqueJewel": "Unique Jewels",
+    "UniqueFlask": "Unique Flasks",
+    "Map": "Maps",
+    "BlightedMap": "Blighted Maps",
+    "UniqueMap": "Unique Maps",
+}
+ALL_CATEGORIES = {**EXCHANGE_TYPES, **STASH_TYPES}
+COLLECTION_TYPES = {**EXCHANGE_TYPES, "UniqueAccessory": STASH_TYPES["UniqueAccessory"]}
+
+
+def format_slug(slug: str) -> str:
+    """Turn 'abyss-scarab-of-descending' into 'Abyss Scarab of Descending'."""
+    parts = slug.replace("_", "-").split("-")
+    small = {"of", "the", "a", "an", "and", "or", "in", "on", "to", "for"}
+    return " ".join(
+        word.lower() if word.lower() in small and index > 0 else word.capitalize()
+        for index, word in enumerate(parts)
+    )
+
+
+async def _stored_chaos_per_divine(league: str) -> float:
+    db = await database.get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT price_chaos FROM snapshots
+               WHERE league = ? AND category = 'Currency'
+                 AND (item_id = 'divine' OR item_name = 'Divine Orb')
+               ORDER BY timestamp DESC LIMIT 1""",
+            (league,),
+        )
+        row = await cursor.fetchone()
+        value = row["price_chaos"] if row else 0
+        return float(value) if isinstance(value, (int, float)) and value > 0 else 0.0
+    finally:
+        await db.close()
+
+
+async def resolve_chaos_per_divine(league: str) -> float | None:
+    """Resolve the live Divine rate, falling back to the latest stored snapshot."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(EXCHANGE_URL, params={"league": league, "type": "Currency"})
+            if response.status_code == 200:
+                payload = response.json()
+                for line in payload.get("lines", []) if isinstance(payload, dict) else []:
+                    if isinstance(line, dict) and str(line.get("id", "")).casefold() == "divine":
+                        value = line.get("primaryValue")
+                        if (
+                            isinstance(value, (int, float))
+                            and not isinstance(value, bool)
+                            and math.isfinite(value)
+                            and value > 0
+                        ):
+                            return float(value)
+    except Exception:
+        log.exception("currency resolution failed for %s", league)
+    stored = await _stored_chaos_per_divine(league)
+    return stored or None
+
+
 _EMPIRICAL_FILTER = (
     "observation_type NOT IN ('ESTIMATED', 'SYNTHETIC')"
     " AND lower(source) NOT LIKE '%synthetic%'"
     " AND lower(source) NOT LIKE '%reconstructed%'"
 )
+
 
 def _iso_ago(hours: float) -> str:
     return (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat(timespec="seconds")

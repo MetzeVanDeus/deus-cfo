@@ -1,6 +1,7 @@
 # Security
 
 DeusCFO is designed to bind its API to loopback and keep market and paper-trading records local. Do not expose the service to a network interface or forward its port.
+The session token is process-lifetime and returned over local HTTP; any process that can access the loopback service can read it, so do not run the app alongside untrusted local software.
 
 ## Reporting
 

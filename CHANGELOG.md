@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.2.0 — 2026-08-25
+
+### Added
+
+- Added a single category contract for exchange and stash market types, shared by the API, collector, and historical market queries.
+- Added selectable 24-hour, 72-hour, and 7-day history windows across the dashboard, signals, and Explorer views.
+- Added an Explorer SVG price-history chart with time labels and accessible chart semantics.
+- Added persisted CFO bankroll and preference inputs, keyboard-expandable position and signal rows, and curated signal details with an expandable raw payload.
+- Added retry controls for boot and item-loading failures, a tab-level render-error boundary, Alt+1 through Alt+6 tab navigation, and a local inline favicon.
+- Added Windows package-build verification to CI, including executable and checksum checks.
+
+### Changed
+
+- Centralized slug formatting and Divine-to-Chaos resolution; live rates now fall back to the latest stored Currency snapshot when the live feed is unavailable.
+- Updated the backend Uvicorn requirement to 0.52.4 and CI checkout actions to v7 as part of release validation.
+- Trade-depth collection now uses the shared live/fallback Divine rate and the collector reuses its request client across categories.
+- Reused one HTTP client across each flip request and collector cycle instead of opening a client per category or fallback call.
+- Flip requests now require a non-empty league and a finite positive budget, and flip responses validate against an explicit API model.
+- Normalized nullable or malformed poe.ninja fields before returning flip results, including names, icons, variants, numeric values, and nullable sparkline samples.
+- Improved frontend error messaging and retry behavior, preserving the paper-portfolio link across transient failures and clearing it only when the server reports not found.
+- Made only expandable table rows appear clickable, added keyboard semantics to those rows, and labeled flip scores with their `/100` scale.
+- Replaced the remote Google Fonts dependency with the local system font stack, removed the lone Explorer emoji, corrected timestamp formatting, and reduced visual noise in dense lists and charts.
+
+### Fixed
+
+- Prevented CX backfill and polling cursors from advancing when league discovery is empty, a wanted league is absent from the returned hour, or no valid wanted-league records can be stored.
+- Prevented invalid and non-finite flip budgets from silently returning empty candidate lists.
+- Prevented malformed nullable market payloads from failing the explicit flip response contract.
+- Removed unused capital/opportunity compatibility aliases and kept backend tests runnable from both repository-root and backend working directories.
+
+### Security
+
+- Documented the process-lifetime loopback session-token threat model: any local process able to access the loopback service can read the token, so untrusted local software must not run alongside DeusCFO.
+
+### Quality
+
+- Added backend regression coverage for shared category/type and slug contracts, HTTP client reuse, Divine-rate fallback, FlipRequest and nullable FlipResult contracts, and CX cursor safety.
+- Added root-compatible pytest configuration so the backend suite can run from the repository root or backend working directory.
+
 ## 0.1.4 — 2026-08-23
 
 - Enabled CodeQL analysis for Python, JavaScript/TypeScript, and GitHub Actions, then resolved all three initial path-handling alerts.
