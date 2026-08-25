@@ -193,8 +193,9 @@ function StatsCard({ stats, historyHours = 24 }) {
 function PriceChart({ history, historyHours = 24 }) {
   const points = useMemo(() => {
     const normalized = (Array.isArray(history) ? history : []).flatMap((point) => {
-      if (point?.price == null || point.price === '') return []
-      const price = Number(point.price)
+      const rawPrice = point?.price
+      if (rawPrice == null || (typeof rawPrice !== 'number' && (typeof rawPrice !== 'string' || rawPrice.trim() === ''))) return []
+      const price = Number(rawPrice)
       return Number.isFinite(price) ? [{ ...point, price }] : []
     })
     if (normalized.length <= 60) return normalized
