@@ -33,6 +33,7 @@
 - Kept selected history-period labels accurate in Explorer statistics and separated missing-field from invalid-budget messages.
 - Used a zero Divine-rate fallback when trade-depth rate resolution is unavailable.
 - Removed unused capital/opportunity compatibility aliases and kept backend tests runnable from both repository-root and backend working directories.
+- Preserved first and final valid price samples and filtered invalid prices before Explorer chart calculations.
 
 ### Security
 
