@@ -11,8 +11,13 @@ export function FlipFinder({ categories, selectedLeague }) {
   const [showResults, setShowResults] = useState(false)
 
   const handleSearch = async () => {
-    if (!selectedLeague || !budgetCurrency || !budgetAmount || !Number.isFinite(Number(budgetAmount)) || Number(budgetAmount) <= 0) {
+    if (!selectedLeague || !budgetCurrency || !budgetAmount) {
       setError('Please fill in all fields')
+      return
+    }
+    const amount = Number(budgetAmount)
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setError('Budget amount must be a positive number')
       return
     }
     setLoading(true)
@@ -21,7 +26,7 @@ export function FlipFinder({ categories, selectedLeague }) {
     try {
       const resp = await api.post('/flips', {
         budgetCurrency,
-        budgetAmount: parseFloat(budgetAmount),
+        budgetAmount: amount,
         leagueId: selectedLeague,
         category: selectedCategory,
       })

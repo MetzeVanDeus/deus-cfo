@@ -12,13 +12,13 @@ function SignalRow({ signal }) {
   const [open, setOpen] = useState(false)
   const move = signal.change_pct ?? signal.price_change_pct
   return <>
-    <tr className="expandable" tabIndex="0" role="button" aria-expanded={open} onClick={() => setOpen((current) => !current)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setOpen((current) => !current) } }}>
+    <tr>
       <td>{fmtRelative(signal.timestamp || signal.detected_at || signal.created_at)}</td>
       <td><span className="signal-mark" /> {signal.type || signal.signal_type || '-'}</td>
       <td><strong>{signal.item || signal.item_name || '-'}</strong></td>
       <td className={`numeric ${(move || 0) >= 0 ? 'positive' : 'negative'}`}>{move == null ? '-' : `${move > 0 ? '+' : ''}${Number(move).toFixed(1)}%`}</td>
       <td className="numeric">{signal.confidence == null ? '-' : `${Math.round(signal.confidence * 100)}%`}</td>
-      <td className="numeric">{open ? '-' : '+'}</td>
+      <td className="numeric"><button type="button" className="text-button row-toggle" aria-expanded={open} aria-label={`${open ? 'Collapse' : 'Expand'} signal details`} onClick={() => setOpen((current) => !current)}>{open ? '-' : '+'}</button></td>
     </tr>
     {open && <tr className="detail-row"><td colSpan="6"><div className="position-detail"><span>Time: <strong>{fmtRelative(signal.timestamp || signal.detected_at || signal.created_at)}</strong></span><span>Type: <strong>{signal.type || signal.signal_type || '—'}</strong></span><span>Item: <strong>{signal.item || signal.item_name || '—'}</strong></span><span>Change: <strong>{move == null ? '—' : `${Number(move).toFixed(1)}%`}</strong></span><span>Source: <strong>{signal.source || '—'}</strong></span></div><details><summary>Raw payload</summary><pre>{JSON.stringify(signal, null, 2)}</pre></details></td></tr>}
   </>

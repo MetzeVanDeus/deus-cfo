@@ -20,7 +20,7 @@
 - Flip requests now require a non-empty league and a finite positive budget, and flip responses validate against an explicit API model.
 - Normalized nullable or malformed poe.ninja fields before returning flip results, including names, icons, variants, numeric values, and nullable sparkline samples.
 - Improved frontend error messaging and retry behavior, preserving the paper-portfolio link across transient failures and clearing it only when the server reports not found.
-- Made only expandable table rows appear clickable, added keyboard semantics to those rows, and labeled flip scores with their `/100` scale.
+- Preserved native table-row semantics with explicit keyboard-accessible detail toggles for expandable position and signal rows, and labeled flip scores with their `/100` scale.
 - Replaced the remote Google Fonts dependency with the local system font stack, removed the lone Explorer emoji, corrected timestamp formatting, and reduced visual noise in dense lists and charts.
 
 ### Fixed
@@ -28,11 +28,16 @@
 - Prevented CX backfill and polling cursors from advancing when league discovery is empty, a wanted league is absent from the returned hour, or no valid wanted-league records can be stored.
 - Prevented invalid and non-finite flip budgets from silently returning empty candidate lists.
 - Prevented malformed nullable market payloads from failing the explicit flip response contract.
+- Kept boot metadata failures independent so one successful request cannot hide another startup error.
+- Recovered malformed persisted CFO bankroll and preference settings by discarding invalid local values and using safe defaults.
+- Kept selected history-period labels accurate in Explorer statistics and separated missing-field from invalid-budget messages.
+- Used a zero Divine-rate fallback when trade-depth rate resolution is unavailable.
 - Removed unused capital/opportunity compatibility aliases and kept backend tests runnable from both repository-root and backend working directories.
 
 ### Security
 
 - Documented the process-lifetime loopback session-token threat model: any local process able to access the loopback service can read the token, so untrusted local software must not run alongside DeusCFO.
+- Disabled persisted checkout credentials in CI and release jobs; release publishing continues to use its explicit `GH_TOKEN`.
 
 ### Quality
 

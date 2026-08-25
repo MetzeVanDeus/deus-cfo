@@ -325,7 +325,7 @@ async def collect_trade_depth(
     quotes = await (adapter or TradeDepthAdapter()).collect(
         league,
         list(registry.records()),
-        chaos_per_divine=await market_data.resolve_chaos_per_divine(league),
+        chaos_per_divine=(await market_data.resolve_chaos_per_divine(league)) or 0.0,
     )
     names = {}
     for recipe in registry.records():

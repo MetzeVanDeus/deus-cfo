@@ -461,6 +461,23 @@ def test_trade_depth_adapter_only_normalizes_buy_payload(monkeypatch):
     assert asyncio.run(unsupported_sell()) is None
 
 
+def test_trade_depth_uses_zero_when_divine_rate_unavailable(monkeypatch):
+    seen = []
+
+    class Adapter:
+        async def collect(self, _league, _recipes, *, chaos_per_divine):
+            seen.append(chaos_per_divine)
+            return {}
+
+    monkeypatch.setattr(
+        collector.market_data,
+        "resolve_chaos_per_divine",
+        lambda _league: asyncio.sleep(0, result=None),
+    )
+    assert asyncio.run(collector.collect_trade_depth("Test", adapter=Adapter())) == {}
+    assert seen == [0.0]
+
+
 def test_trade_depth_collector_persists_adapter_quotes(monkeypatch, tmp_path):
     class Adapter:
         async def collect(self, _league, _recipes, *, chaos_per_divine):

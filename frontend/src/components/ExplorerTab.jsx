@@ -95,7 +95,7 @@ export function ExplorerTab({ categories, selectedLeague, historyHours = 24 }) {
             <RegimeCard regime={regime} />
           </div>
           {/* Statistics */}
-          <StatsCard stats={stats} />
+          <StatsCard stats={stats} historyHours={historyHours} />
           {/* Price History Chart */}
           <PriceChart history={history} historyHours={historyHours} />
         </div>
@@ -163,7 +163,7 @@ function RegimeCard({ regime }) {
     </div>
   )
 }
-function StatsCard({ stats }) {
+function StatsCard({ stats, historyHours = 24 }) {
   const rows = [
     ['Mean', fmtPrice(stats.mean)],
     ['Median', fmtPrice(stats.median)],
@@ -178,7 +178,7 @@ function StatsCard({ stats }) {
   ]
   return (
     <div className="card">
-      <h3 className="text-sm font-semibold text-dracula-comment uppercase tracking-wide mb-4">Rolling Statistics (24h)</h3>
+      <h3 className="text-sm font-semibold text-dracula-comment uppercase tracking-wide mb-4">Rolling Statistics ({historyHours}h)</h3>
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
         {rows.map(([label, val]) => (
           <div key={label}>
