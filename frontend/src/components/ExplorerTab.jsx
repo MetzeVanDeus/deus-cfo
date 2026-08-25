@@ -192,14 +192,16 @@ function StatsCard({ stats, historyHours = 24 }) {
 }
 function PriceChart({ history, historyHours = 24 }) {
   const points = useMemo(() => {
-    if (!history || history.length === 0) return []
-    // Sample to ~60 points max for performance
-    let h = history
-    if (h.length > 60) {
-      const step = Math.ceil(h.length / 60)
-      h = h.filter((_, i) => i % step === 0)
-    }
-    return h
+    const normalized = (Array.isArray(history) ? history : []).flatMap((point) => {
+      const rawPrice = point?.price
+      if (rawPrice == null || (typeof rawPrice !== 'number' && (typeof rawPrice !== 'string' || rawPrice.trim() === ''))) return []
+      const price = Number(rawPrice)
+      return Number.isFinite(price) ? [{ ...point, price }] : []
+    })
+    if (normalized.length <= 60) return normalized
+    const indexes = new Set([0, normalized.length - 1])
+    for (let i = 1; i < 59; i += 1) indexes.add(Math.round(i * (normalized.length - 1) / 59))
+    return [...indexes].sort((a, b) => a - b).map((index) => normalized[index])
   }, [history])
   if (points.length === 0) {
     return (
