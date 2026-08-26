@@ -1,5 +1,6 @@
 import asyncio
 import json
+from datetime import datetime, timezone
 
 import collector
 import database
@@ -13,6 +14,8 @@ from strategies import (
     DivinationCardStrategyProvider,
     default_div_card_registry,
 )
+
+_RECENT_OBSERVED_AT = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 def recipe(**changes):
@@ -62,14 +65,14 @@ def market_context(*, depth=True, bankroll=10):
             "DivinationCard:test-card": {
                 "buy_levels": [{"price": 6, "quantity": 4}],
                 "fee_rate": 0,
-                "observed_at": "2026-08-15T00:00:00Z",
+                "observed_at": _RECENT_OBSERVED_AT,
                 "confidence": 0.9,
                 "source": "test-depth",
             },
             "Currency:test-orb": {
                 "sell_levels": [{"price": 3.5, "quantity": 10}],
                 "fee_rate": 0.05,
-                "observed_at": "2026-08-15T00:00:00Z",
+                "observed_at": _RECENT_OBSERVED_AT,
                 "confidence": 0.8,
                 "source": "test-depth",
             },
@@ -173,14 +176,12 @@ def test_profit_routes_endpoint_exposes_card_routes(monkeypatch):
         "DivinationCard": [{
             "item_id": "test-card", "item_name": "Test Card", "price_chaos": 5,
             "source": "test", "confidence_grade": "A",
-            "buy_levels": [{"price": 6, "quantity": 4}], "fee_rate": 0,
-            "observed_at": "2026-08-15T00:00:00Z", "confidence": 0.9,
+            "buy_levels": [{"price": 6, "quantity": 4}], "fee_rate": 0, "observed_at": _RECENT_OBSERVED_AT, "confidence": 0.9,
         }],
         "Currency": [{
             "item_id": "test-orb", "item_name": "Test Orb", "price_chaos": 3,
             "source": "test", "confidence_grade": "A",
-            "sell_levels": [{"price": 3.5, "quantity": 10}], "fee_rate": 0.05,
-            "observed_at": "2026-08-15T00:00:00Z", "confidence": 0.8,
+            "sell_levels": [{"price": 3.5, "quantity": 10}], "fee_rate": 0.05, "observed_at": _RECENT_OBSERVED_AT, "confidence": 0.8,
         }],
     }
     async def latest(_league):
@@ -202,7 +203,7 @@ def test_actual_recipe_snapshot_ids_produce_theoretical_route(monkeypatch):
                 "variant": "", "price_chaos": 42, "volume": 12,
                 "listing_count": 12, "source": "poe.ninja",
                 "observation_type": "DIRECT_OBSERVATION",
-                "observed_at": "2026-08-15T00:00:00Z",
+                "observed_at": _RECENT_OBSERVED_AT,
                 "confidence_grade": "B",
             }],
             "UniqueAccessory": [{
@@ -211,7 +212,7 @@ def test_actual_recipe_snapshot_ids_produce_theoretical_route(monkeypatch):
                 "variant": "", "price_chaos": 410, "volume": 4,
                 "listing_count": 4, "source": "poe.ninja",
                 "observation_type": "DIRECT_OBSERVATION",
-                "observed_at": "2026-08-15T00:00:00Z",
+                "observed_at": _RECENT_OBSERVED_AT,
                 "confidence_grade": "B",
             }],
         }
@@ -293,14 +294,12 @@ def test_capital_planning_receives_card_opportunity(monkeypatch, tmp_path):
         "DivinationCard": [{
             "item_id": "test-card", "item_name": "Test Card", "price_chaos": 5,
             "source": "test", "confidence_grade": "A",
-            "buy_levels": [{"price": 6, "quantity": 4}], "fee_rate": 0,
-            "observed_at": "2026-08-15T00:00:00Z", "confidence": 0.9,
+            "buy_levels": [{"price": 6, "quantity": 4}], "fee_rate": 0, "observed_at": _RECENT_OBSERVED_AT, "confidence": 0.9,
         }],
         "Currency": [{
             "item_id": "test-orb", "item_name": "Test Orb", "price_chaos": 3,
             "source": "test", "confidence_grade": "A",
-            "sell_levels": [{"price": 3.5, "quantity": 10}], "fee_rate": 0.05,
-            "observed_at": "2026-08-15T00:00:00Z", "confidence": 0.8,
+            "sell_levels": [{"price": 3.5, "quantity": 10}], "fee_rate": 0.05, "observed_at": _RECENT_OBSERVED_AT, "confidence": 0.8,
         }],
     }
     captured = {}
@@ -349,7 +348,7 @@ def test_collector_database_and_market_context_preserve_execution_quote(monkeypa
                 "execution_quote": {
                     "buy_levels": [{"price": 6, "quantity": 4}],
                     "fee_rate": 0,
-                    "observed_at": "2026-08-15T00:00:00Z",
+                    "observed_at": _RECENT_OBSERVED_AT,
                     "confidence": 0.9,
                     "source": "collector-depth",
                 },
@@ -374,7 +373,7 @@ def test_collector_database_and_market_context_preserve_execution_quote(monkeypa
             "execution_quote": {
                 "sell_levels": [{"price": 3.5, "quantity": 10}],
                 "fee_rate": 0.05,
-                "observed_at": "2026-08-15T00:00:00Z",
+                "observed_at": _RECENT_OBSERVED_AT,
                 "confidence": 0.8,
                 "source": "collector-depth",
             },
@@ -486,14 +485,14 @@ def test_trade_depth_collector_persists_adapter_quotes(monkeypatch, tmp_path):
                 "DivinationCard:test-card": {
                     "buy_levels": [{"price": 6, "quantity": 4}],
                     "fee_rate": 0,
-                    "observed_at": "2026-08-15T00:00:00Z",
+                    "observed_at": _RECENT_OBSERVED_AT,
                     "confidence": 0.6,
                     "source": "pathofexile_trade_api",
                 },
                 "Currency:test-orb": {
                     "sell_levels": [{"price": 40, "quantity": 10}],
                     "fee_rate": 0,
-                    "observed_at": "2026-08-15T00:00:00Z",
+                    "observed_at": _RECENT_OBSERVED_AT,
                     "confidence": 0.6,
                     "source": "pathofexile_trade_api",
                 },
@@ -504,10 +503,10 @@ def test_trade_depth_collector_persists_adapter_quotes(monkeypatch, tmp_path):
             "league": "Test", "category": "Currency", "item_id": "divine",
             "item_name": "Divine Orb", "price_chaos": 10, "volume": 1,
             "listing_count": 1, "source": "test", "observation_type": "DIRECT_OBSERVATION",
-            "observed_at": "2026-08-15T00:00:00Z", "confidence_grade": "A",
-        }], timestamp="2026-08-15T00:00:00Z")
+            "observed_at": _RECENT_OBSERVED_AT, "confidence_grade": "A",
+        }], timestamp=_RECENT_OBSERVED_AT)
         quotes = await collector.collect_trade_depth(
-            "Test", timestamp="2026-08-15T00:00:00Z", adapter=Adapter()
+            "Test", timestamp=_RECENT_OBSERVED_AT, adapter=Adapter()
         )
         latest = await market_data.get_all_latest("Test")
         return quotes, latest
@@ -540,9 +539,9 @@ def test_finite_outcome_executable_value_is_probability_weighted():
         "Currency:rare": 2,
     }
     context["execution_prices"] = {
-        "DivinationCard:test-card": {"buy_levels": [{"price": 6, "quantity": 4}], "fee_rate": 0, "observed_at": "2026-08-15T00:00:00Z", "confidence": 1, "source": "test"},
-        "Currency:common": {"sell_levels": [{"price": 10, "quantity": 10}], "fee_rate": 0, "observed_at": "2026-08-15T00:00:00Z", "confidence": 1, "source": "test"},
-        "Currency:rare": {"sell_levels": [{"price": 2, "quantity": 10}], "fee_rate": 0, "observed_at": "2026-08-15T00:00:00Z", "confidence": 1, "source": "test"},
+        "DivinationCard:test-card": {"buy_levels": [{"price": 6, "quantity": 4}], "fee_rate": 0, "observed_at": _RECENT_OBSERVED_AT, "confidence": 1, "source": "test"},
+        "Currency:common": {"sell_levels": [{"price": 10, "quantity": 10}], "fee_rate": 0, "observed_at": _RECENT_OBSERVED_AT, "confidence": 1, "source": "test"},
+        "Currency:rare": {"sell_levels": [{"price": 2, "quantity": 10}], "fee_rate": 0, "observed_at": _RECENT_OBSERVED_AT, "confidence": 1, "source": "test"},
     }
     route = DivinationCardStrategyProvider(DivCardRegistry([card_recipe], version="3.0", source="test")).evaluate(context)[0]
     assert route.realistic_output_value == pytest.approx(40)
@@ -571,7 +570,7 @@ def test_flat_market_context_preserves_stale_execution_marker():
             "item_id": "test-card", "item_name": "Test Card", "price_chaos": 5,
             "stale": True,
             "buy_levels": [{"price": 6, "quantity": 4}],
-            "observed_at": "2026-08-15T00:00:00Z", "confidence": 0.9,
+            "observed_at": _RECENT_OBSERVED_AT, "confidence": 0.9,
             "source": "test",
         }],
     })
@@ -581,3 +580,27 @@ def test_flat_market_context_preserves_stale_execution_marker():
     })[0]
     assert route.market_capacity == 0
     assert route.recommended_capacity == 0
+
+def test_batch_ladder_stops_before_negative_marginal_batch():
+    ladder = strategies.evaluate_batch_ladder(
+        set_size=1,
+        outcomes=[{"reward_quantity": 1, "probability": 1.0}],
+        buy_quote={"levels": [{"price": 1, "quantity": 1}, {"price": 100, "quantity": 1}], "fee": 0},
+        sell_quotes=[{"levels": [{"price": 100, "quantity": 1}, {"price": 90, "quantity": 1}], "fee": 0}],
+        max_batch=2,
+        budget_chaos=0,
+        time_horizon_hours=24,
+        capital_lock_time=1,
+    )
+    assert [entry["batch_size"] for entry in ladder] == [1]
+
+def test_quote_outside_one_day_window_is_not_executable():
+    now = datetime.now(timezone.utc)
+    for observed_at in (
+        (now - strategies._EXECUTION_QUOTE_MAX_AGE - strategies.timedelta(seconds=1)).isoformat(),
+        (now + strategies.timedelta(seconds=1)).isoformat(),
+    ):
+        assert strategies._quote_info({"item": {
+            "buy_levels": [{"price": 1, "quantity": 1}], "observed_at": observed_at,
+            "confidence": 1, "source": "test",
+        }}, "item", side="buy") is None

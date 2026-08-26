@@ -15,6 +15,8 @@ from pydantic import BaseModel, Field
 
 from opportunity import InvestableOpportunity
 
+_EXECUTION_QUOTE_MAX_AGE = timedelta(hours=24)
+
 
 class ProfitRoute(BaseModel):
     """Execution-aware route values with explicit units.
@@ -748,6 +750,9 @@ def _quote_info(execution_prices: Mapping[str, Any], key: str, *, side: str) -> 
         return None
     if parsed_observed_at.tzinfo is None:
         return None
+    now = datetime.now(timezone.utc)
+    if parsed_observed_at > now or now - parsed_observed_at > _EXECUTION_QUOTE_MAX_AGE:
+        return None
     confidence = quote.get("confidence")
     if not isinstance(confidence, (int, float)) or isinstance(confidence, bool) or not 0 <= confidence <= 1:
         return None
@@ -800,7 +805,8 @@ def evaluate_batch_ladder(
             outcome_capacities.append(int(sum(float(level["quantity"]) for level in quote["levels"]) // float(outcome["reward_quantity"])))
             output_value += float(outcome["probability"]) * liquidation
         net = output_value - input_cost
-        if net <= 0:
+        previous_net = ladder[-1]["safe_net_chaos"] if ladder else 0.0
+        if net <= 0 or net - previous_net <= 0:
             break
         ladder.append({
             "batch_size": batch_size,
@@ -935,7 +941,8 @@ class DivinationCardStrategyProvider:
             pricing_confidence = min(quote_confidences) if quote_confidences else 0.0
             strategy_confidence = float(recipe["strategy_confidence"])
             confidence = pricing_confidence * strategy_confidence if quote_confidences else 0.0
-            source = next(iter(set(quote_sources)), recipe["source"]) if quote_sources else recipe["source"]
+            unique_sources = sorted(set(quote_sources))
+            source = unique_sources[0] if len(unique_sources) == 1 else "mixed" if unique_sources else recipe["source"]
             input_cost = executable_cost if executable_cost is not None else theoretical_cost
             output_value = executable_output if executable_output is not None else theoretical_output
             outcome_outputs = []

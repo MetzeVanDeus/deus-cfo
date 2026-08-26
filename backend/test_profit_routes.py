@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime, timezone
 
 import pytest
 
@@ -14,7 +15,7 @@ def _record(item, price, *, source="test-market", grade="A"):
         "volume": 20,
         "source": source,
         "observation_type": "DIRECT_OBSERVATION",
-        "observed_at": "2026-08-14T21:00:00+00:00",
+        "observed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "confidence_grade": grade,
     }
 

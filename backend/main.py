@@ -632,7 +632,7 @@ async def create_capital_plan(request: CapitalPlanRequest):
                 **market,
                 "chaos_per_divine": chaos_per_divine,
                 "active_poe_patch": active_poe_patch,
-                "budget_chaos": request.bankroll.total_net_worth * chaos_per_divine,
+                "budget_chaos": request.bankroll.available_currency * chaos_per_divine,
                 "capacity_horizon_hours": float(request.hours),
             }
             candidates.extend(provider.discover(provider_context))
