@@ -720,15 +720,19 @@ def _consume_depth(levels: Any, quantity: float, *, buy: bool) -> tuple[float, f
         if not isinstance(level, Mapping):
             return None
         price, available = level.get("price"), level.get("quantity")
-        if not isinstance(price, (int, float)) or not isinstance(available, (int, float)) or price <= 0 or available <= 0:
+        if (
+            isinstance(price, bool) or isinstance(available, bool)
+            or not isinstance(price, (int, float)) or not isinstance(available, (int, float))
+            or not math.isfinite(float(price)) or not math.isfinite(float(available))
+            or price <= 0 or available <= 0
+        ):
             return None
-        take = min(remaining, float(available))
-        total += take * float(price)
-        filled += take
-        remaining -= take
-        if remaining <= 1e-9:
-            return total, filled
-    return None
+        if remaining > 1e-9:
+            take = min(remaining, float(available))
+            total += take * float(price)
+            filled += take
+            remaining -= take
+    return (total, filled) if remaining <= 1e-9 else None
 
 
 def _quote_info(execution_prices: Mapping[str, Any], key: str, *, side: str) -> dict[str, Any] | None:
@@ -857,11 +861,12 @@ class DivinationCardStrategyProvider:
                 reasons.append("trusted finite-outcome reward distribution verified")
             reasons.append(f"verified against PoE patch {recipe['poe_patch']}")
             card_price = _exact_price_info(prices, records, recipe["card_market_key"])
+            theoretical_confidences = [card_price["confidence"]] if card_price else []
+            theoretical_sources = [card_price["source"]] if card_price and card_price["source"] else []
             if card_price is None:
                 reasons.append(f"missing market price: {recipe['card_market_key']}")
             theoretical_cost = card_price["price"] * recipe["set_size"] if card_price else None
             theoretical_output = 0.0
-            theoretical_confidences = [card_price["confidence"]] if card_price else []
             for outcome in outcomes:
                 reward_price = _exact_price_info(prices, records, outcome["reward_market_key"])
                 if reward_price is None:
@@ -870,6 +875,8 @@ class DivinationCardStrategyProvider:
                     break
                 theoretical_output += float(outcome["probability"]) * float(outcome["reward_quantity"]) * reward_price["price"]
                 theoretical_confidences.append(reward_price["confidence"])
+                if reward_price["source"]:
+                    theoretical_sources.append(reward_price["source"])
             theoretical_roi = (
                 (theoretical_output - theoretical_cost) / theoretical_cost
                 if theoretical_cost and theoretical_output is not None else None
@@ -898,9 +905,10 @@ class DivinationCardStrategyProvider:
                     liquidation = fill[0] * (1 - quote["fee"])
                     first_liquidations.append(liquidation)
                     executable_output += float(outcome["probability"]) * liquidation
+            complete_execution = executable_cost is not None and executable_output is not None
             executable_roi = (
                 (executable_output - executable_cost) / executable_cost
-                if executable_cost and executable_output is not None else None
+                if complete_execution else None
             )
             market_ladder = evaluate_batch_ladder(
                 set_size=recipe["set_size"], outcomes=outcomes, buy_quote=buy_quote,
@@ -917,41 +925,41 @@ class DivinationCardStrategyProvider:
                 sell_quotes=sell_quotes, max_batch=recipe.get("max_batch", 1), budget_chaos=budget,
                 time_horizon_hours=horizon, capital_lock_time=capital_lock_time,
             )
-            market_capacity = len(market_ladder)
-            budget_capacity = len(budget_ladder) if budget > 0 else market_capacity
-            recommended_capacity = len(recommended_ladder)
-            net = float(executable_output - executable_cost) if executable_output is not None and executable_cost is not None else 0.0
-            if executable_output is not None:
+            market_capacity = len(market_ladder) if complete_execution else 0
+            budget_capacity = len(budget_ladder) if budget > 0 and complete_execution else 0
+            recommended_capacity = len(recommended_ladder) if complete_execution else 0
+            net = float(executable_output - executable_cost) if complete_execution else 0.0
+            if complete_execution:
                 reasons.append("depth-aware executable buy and probability-weighted liquidation quotes")
             else:
                 reasons.append("executable depth unavailable; scalable capacity is zero")
-            if theoretical_roi is not None and executable_output is None:
+            if theoretical_roi is not None and not complete_execution:
                 reasons.append("theoretical pricing is available; execution remains unverified")
             reasons.append("positive executable set profit" if net > 0 else "no positive executable profit")
             if market_capacity < 1 and buy_quote and all(sell_quotes):
                 reasons.append("no positive-safe batch remains after cumulative depth evaluation")
             status = (
-                "executable" if executable_output is not None and executable_cost is not None and market_capacity > 0
-                else "non_executable" if executable_output is not None and executable_cost is not None
+                "executable" if complete_execution and market_capacity > 0
+                else "non_executable" if complete_execution
                 else "theoretical" if theoretical_roi is not None
                 else "insufficient_evidence"
             )
             quote_confidences = [buy_quote["confidence"]] + [quote["confidence"] for quote in sell_quotes if quote] if buy_quote else []
-            quote_sources = [buy_quote["source"]] + [quote["source"] for quote in sell_quotes if quote] if buy_quote else []
-            quote_times = [buy_quote["observed_at"]] + [quote["observed_at"] for quote in sell_quotes if quote] if buy_quote else []
-            confidence_inputs = quote_confidences if executable_output is not None else theoretical_confidences
+            quote_sources = [buy_quote["source"]] + [quote["source"] for quote in sell_quotes] if complete_execution else []
+            quote_times = [buy_quote["observed_at"]] + [quote["observed_at"] for quote in sell_quotes] if complete_execution else []
+            confidence_inputs = quote_confidences if complete_execution else theoretical_confidences
             pricing_confidence = min(confidence_inputs) if confidence_inputs else 0.0
             strategy_confidence = float(recipe["strategy_confidence"])
             confidence = pricing_confidence * strategy_confidence if confidence_inputs else 0.0
-            unique_sources = sorted(set(quote_sources))
+            unique_sources = sorted(set(quote_sources if complete_execution else theoretical_sources))
             source = unique_sources[0] if len(unique_sources) == 1 else "mixed" if unique_sources else recipe["source"]
-            input_cost = executable_cost if executable_cost is not None else theoretical_cost
-            output_value = executable_output if executable_output is not None else theoretical_output
+            input_cost = executable_cost if complete_execution else theoretical_cost
+            output_value = executable_output if complete_execution else theoretical_output
             outcome_outputs = []
             outcome_liquidation = []
             for index, outcome in enumerate(outcomes):
                 quote = sell_quotes[index]
-                capacity = int(sum(float(level["quantity"]) for level in quote["levels"]) // float(outcome["reward_quantity"])) if quote else 0
+                capacity = int(sum(float(level["quantity"]) for level in quote["levels"]) // float(outcome["reward_quantity"])) if complete_execution else 0
                 outcome_outputs.append({**outcome, "liquidation_capacity_sets": capacity})
                 outcome_liquidation.append({"probability": float(outcome["probability"]), "capacity_sets": capacity})
             route = ProfitRoute(
@@ -960,9 +968,9 @@ class DivinationCardStrategyProvider:
                 total_input_cost=float(input_cost or 0), realistic_output_value=float(output_value or 0),
                 gross_profit=float((output_value or 0) - (input_cost or 0)), expected_net_profit=net,
                 roi=float(executable_roi or 0), theoretical_roi=theoretical_roi, executable_roi=executable_roi,
-                capital_required=float(executable_cost or theoretical_cost or 0), capacity=float(recommended_capacity),
+                capital_required=float(input_cost or 0), capacity=float(recommended_capacity),
                 theoretical_net_profit=theoretical_net,
-                executable_net_profit=net if executable_output is not None else None,
+                executable_net_profit=net if complete_execution else None,
                 capacity_units="sets", active_execution_time=active_time, capital_lock_time=capital_lock_time,
                 elapsed_cycle_time=capital_lock_time,
                 profit_per_active_hour=float(net / max(0.25, active_time)),
@@ -972,8 +980,7 @@ class DivinationCardStrategyProvider:
                 market_capacity=market_capacity, time_horizon_hours=horizon,
                 capacity_assumptions=["capacity is measured in complete sets", "buy and sell depth are consumed cumulatively", "unknown or stale depth produces zero scalable sets"],
                 reasons=list(reasons), confidence=confidence, pricing_confidence=pricing_confidence,
-                strategy_confidence=strategy_confidence, execution_risk=float(recipe["execution_risk"] if buy_quote else 1.0),
-                liquidity={"tier": validation.liquidity_tier(float(market_capacity)), "volume": market_capacity, "capacity_units": "sets", "outcomes": outcome_liquidation},
+                strategy_confidence=strategy_confidence, execution_risk=float(recipe["execution_risk"] if complete_execution else 1.0),
                 source=source, verified_version=recipe["verified_version"], poe_patch=recipe["poe_patch"],
                 verification_metadata={
                     "registry_version": self.registry.version, "registry_source": self.registry.source,

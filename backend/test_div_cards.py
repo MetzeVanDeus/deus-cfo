@@ -12,6 +12,7 @@ from strategies import (
     DivCardRecipe,
     DivCardRegistry,
     DivinationCardStrategyProvider,
+    _consume_depth,
     default_div_card_registry,
 )
 
@@ -42,6 +43,15 @@ def recipe(**changes):
     }
     value.update(changes)
     return value
+@pytest.mark.parametrize("level", [{"price": True, "quantity": 1}, {"price": 1, "quantity": False}, {"price": float("nan"), "quantity": 1}, {"price": 1, "quantity": float("inf")}, {"price": 0, "quantity": 1}, {"price": 1, "quantity": -1}])
+def test_invalid_depth_levels_are_rejected_before_arithmetic(level):
+    assert _consume_depth([level], 1, buy=True) is None
+
+def test_valid_depth_levels_are_consumed():
+    assert _consume_depth([{"price": 2, "quantity": 1}], 1, buy=True) == (2.0, 1.0)
+@pytest.mark.parametrize("level", [{"price": True, "quantity": 1}, {"price": 1, "quantity": False}, {"price": float("nan"), "quantity": 1}, {"price": 1, "quantity": float("inf")}, {"price": 0, "quantity": 1}, {"price": 1, "quantity": -1}])
+def test_trailing_invalid_depth_level_rejects_completed_fill(level):
+    assert _consume_depth([{"price": 2, "quantity": 1}, level], 1, buy=True) is None
 
 
 def test_typed_recipe_contract_is_constructible():
@@ -78,6 +88,33 @@ def market_context(*, depth=True, bankroll=10):
             },
         }
     return context
+def test_partial_execution_uses_theoretical_route_without_capacity():
+    context = market_context()
+    del context["execution_prices"]["Currency:test-orb"]
+    route = DivinationCardStrategyProvider(DivCardRegistry([recipe()], version="3.0", source="test")).evaluate(context)[0]
+    assert route.total_input_cost == pytest.approx(20)
+    assert route.realistic_output_value == pytest.approx(30)
+    assert route.source == "request"
+    assert route.capital_required == pytest.approx(20)
+    assert route.executable_net_profit is None
+    assert route.market_capacity == route.budget_capacity == route.recommended_capacity == 0
+
+
+def test_missing_buy_depth_suppresses_sell_capacity_metadata():
+    context = market_context()
+    del context["execution_prices"]["DivinationCard:test-card"]
+    route = DivinationCardStrategyProvider(DivCardRegistry([recipe()], version="3.0", source="test")).evaluate(context)[0]
+    assert route.outputs[0]["liquidation_capacity_sets"] == 0
+    assert route.verification_metadata["outcome_liquidation"][0]["capacity_sets"] == 0
+
+
+def test_invalid_sell_depth_returns_theoretical_route():
+    context = market_context()
+    context["execution_prices"]["Currency:test-orb"]["sell_levels"][0]["quantity"] = float("nan")
+    route = DivinationCardStrategyProvider(DivCardRegistry([recipe()], version="3.0", source="test")).evaluate(context)[0]
+    assert route.status == "theoretical"
+    assert route.executable_net_profit is None
+    assert route.outputs[0]["liquidation_capacity_sets"] == 0
 
 
 def test_registry_is_versioned_strict_and_unique():

@@ -1,4 +1,11 @@
 # Changelog
+## 0.3.1 — 2026-08-26
+
+### Fixed
+
+- Rejected boolean, non-finite, zero, and negative execution-depth prices and quantities before ladder arithmetic.
+- Kept routes fully theoretical when either executable buy or sell depth is unavailable or stale, with no executable profit or scalable capacity.
+
 ## 0.3.0 — 2026-08-26
 
 ### Changed
