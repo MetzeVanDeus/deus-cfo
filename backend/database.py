@@ -376,7 +376,14 @@ def validate_execution_quote(value) -> dict | None:
     observed_at = value.get("observed_at")
     source = value.get("source")
     confidence = value.get("confidence")
+    stale = value.get("stale", False)
     if not isinstance(observed_at, str) or not observed_at:
+        return None
+    try:
+        parsed_observed_at = datetime.fromisoformat(observed_at.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed_observed_at.tzinfo is None or not isinstance(stale, bool):
         return None
     if not isinstance(source, str) or not source:
         return None
@@ -402,6 +409,7 @@ def validate_execution_quote(value) -> dict | None:
         "observed_at": observed_at,
         "confidence": float(confidence),
         "source": source,
+        "stale": stale,
     })
     return result
 

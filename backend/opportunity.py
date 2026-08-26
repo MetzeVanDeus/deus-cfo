@@ -64,7 +64,7 @@ class InvestableOpportunity(BaseModel):
     realistic_exit_price: float | None = None
     expected_return: float
     expected_profit_per_unit: float
-    expected_profit_per_divine_hour: float = 0.0
+    expected_roi_per_lock_hour: float = 0.0
     win_probability: float
     expected_duration: float
     duration_distribution: list[float] = []
@@ -198,7 +198,7 @@ def normalize_opportunity(
         realistic_exit_price=opportunity.realistic_exit,
         expected_return=expected_return,
         expected_profit_per_unit=profit_per_unit,
-        expected_profit_per_divine_hour=round((expected_return / 100) / duration, 8),
+        expected_roi_per_lock_hour=round((expected_return / 100) / duration, 8),
         win_probability=max(0.0, min(1.0, float(opportunity.win_probability or 0))),
         expected_duration=duration,
         duration_distribution=duration_distribution,

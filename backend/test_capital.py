@@ -235,7 +235,7 @@ def test_normalization_converts_chaos_capacity_to_divines():
     assert normalized.opportunity_capacity == 10
     assert normalized.minimum_capital == .005
     assert normalized.expected_profit_per_unit == .0005
-    assert normalized.expected_profit_per_divine_hour == .01666667
+    assert normalized.expected_roi_per_lock_hour == .01666667
 
 
 def test_calibration_is_sample_gated_and_shrunk_toward_raw_probability():

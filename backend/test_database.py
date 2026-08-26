@@ -291,3 +291,12 @@ def test_collection_guard_counts_database_outside_project(tmp_path, monkeypatch)
 
     monkeypatch.setattr(database, "DB_PATH", str(project / "deuscfo.db"))
     assert database.collection_allowed() is True
+
+def test_execution_quote_validation_preserves_stale_and_rejects_invalid_timestamp():
+    quote = {
+        "sell_levels": [{"price": 3, "quantity": 2}],
+        "observed_at": "2026-08-15T00:00:00Z", "confidence": 0.8,
+        "source": "test", "stale": True,
+    }
+    assert database.validate_execution_quote(quote)["stale"] is True
+    assert database.validate_execution_quote({**quote, "observed_at": "now"}) is None
