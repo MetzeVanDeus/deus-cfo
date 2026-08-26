@@ -60,9 +60,10 @@ def test_profit_route_calculation_preserves_price_provenance():
     assert route.gross_profit == pytest.approx(3.8)
     assert route.expected_net_profit == pytest.approx(1.32)
     assert route.roi == pytest.approx(1.32 / 21)
-    assert route.profit_per_hour == pytest.approx(1.32 / 3)
-    assert route.profit_per_divine_hour == pytest.approx((1.32 / 100) / 3)
-    assert route.capacity == 3
+    assert route.profit_per_active_hour == pytest.approx(1.32 / 2)
+    assert route.roi_per_lock_hour == pytest.approx((1.32 / 21) / 3)
+    assert route.elapsed_cycle_time == pytest.approx(3)
+    assert route.capacity == 0
     assert route.source == "test-market"
     assert route.verification_metadata["definition_source"] == "test-definition"
     assert route.verification_metadata["verified_version"] == "v1"
@@ -102,7 +103,7 @@ def test_profit_routes_api_uses_latest_market_rows(monkeypatch):
     assert response["routes"][0]["execution_steps"] == []
 
 
-def test_capital_plan_receives_transformation_as_allocator_candidate(monkeypatch, tmp_path):
+def test_capital_plan_keeps_theoretical_candidate_without_exact_execution_depth(monkeypatch, tmp_path):
     rows = {
         "Currency": [_record("Divine", 100), _record("Chaos", 1), _record("A", 10),
                      _record("B", 40), _record("C", 4)],
@@ -119,7 +120,8 @@ def test_capital_plan_receives_transformation_as_allocator_candidate(monkeypatch
 
     def build(*args, **kwargs):
         captured["candidates"] = args[2]
-        return original(*args, **kwargs)
+        captured["plan"] = original(*args, **kwargs)
+        return captured["plan"]
 
     monkeypatch.setattr(main.database, "DB_PATH", str(tmp_path / "capital.db"))
     monkeypatch.setattr(main, "_resolve_chaos_per_divine", lambda _league: asyncio.sleep(0, result=100))
@@ -134,10 +136,9 @@ def test_capital_plan_receives_transformation_as_allocator_candidate(monkeypatch
         simulations=5,
     )
     asyncio.run(main.create_capital_plan(request))
-    route = next(item for item in captured["candidates"] if item.id == "test-route")
-    assert route.strategy_type == "transformation"
-    assert route.metadata["profit_route"]["verified_version"] == "v1"
-    assert route.minimum_capital == 21 / 100
+    candidate = next(item for item in captured["candidates"] if item.id == "test-route")
+    assert candidate.opportunity_capacity == 0
+    assert captured["plan"].positions == []
 
 
 def test_profit_route_requires_every_market_component():
@@ -152,23 +153,15 @@ def test_profit_route_requires_every_market_component():
     })
 
 
-def test_discover_adapts_allocator_units_and_filters_to_positive_routes():
+def test_discover_keeps_theoretical_candidate_without_execution_depth():
     rows = {item: _record(item, price) for item, price in (("A", 10), ("Chaos", 1), ("B", 40), ("C", 4))}
     prices = {f"Currency:{item}": row for item, row in rows.items()}
-    opportunities = TransformationStrategyProvider(_registry()).discover({
-        "prices": prices,
-        "price_records": prices,
-        "chaos_per_divine": 100,
-        "bankroll": 50,
+    candidates = TransformationStrategyProvider(_registry()).discover({
+        "prices": prices, "price_records": prices, "chaos_per_divine": 100, "bankroll": 50,
     })
-    opportunity = opportunities[0]
-    assert opportunity.realistic_entry_price == 21
-    assert opportunity.realistic_exit_price == pytest.approx(24.8)
-    assert opportunity.expected_return == pytest.approx((1.32 / 21) * 100)
-    assert opportunity.expected_profit_per_unit == pytest.approx(1.32 / 100)
-    assert opportunity.minimum_capital == pytest.approx(21 / 100)
-    assert opportunity.maximum_reasonable_capital == pytest.approx(63 / 100)
-    assert opportunity.opportunity_capacity == pytest.approx(63 / 100)
+    assert len(candidates) == 1
+    assert candidates[0].expected_profit_per_unit > 0
+    assert candidates[0].opportunity_capacity == 0
 
 
 def test_scalar_prices_are_unverified():

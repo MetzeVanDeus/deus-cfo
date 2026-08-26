@@ -1,4 +1,18 @@
 # Changelog
+## 0.3.0 — 2026-08-26
+
+### Changed
+
+- Corrected the public `ProfitRoute` contract with documented Chaos, ratio, hour, capacity, and `[0, 1]` confidence units. Ambiguous execution/sale and profit-rate fields were replaced by `active_execution_time`, `capital_lock_time`, `elapsed_cycle_time`, `profit_per_active_hour`, and `roi_per_lock_hour`.
+- Split route economics into theoretical, exact-depth executable, and journal-actual profit fields. Theoretical routes remain visible while missing or stale executable depth fails closed with zero scalable capacity.
+- Corrected finite-outcome executable value to probability-weighted expected liquidation value (`Σ(probability × quantity × executable liquidation value)`), retaining each outcome's probability and liquidation capacity.
+- Added cumulative batch-depth evaluation from one batch through each bounded maximum. Market, budget, and recommended capacities now derive from this ladder and stop on missing depth, budget, horizon, or non-positive safe net; first-level averages are never extrapolated.
+- Updated allocator adaptation and the Profit Routes UI to consume the clean route contract, show units, and distinguish theoretical, executable, and actual values.
+
+### Release
+
+- Bumped the frontend package and lockfile to `0.3.0` for the observable ProfitRoute API contract change.
+
 
 ## 0.2.0 — 2026-08-25
 

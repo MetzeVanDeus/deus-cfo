@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api, fmtPrice } from '../lib/helpers'
-import { EmptyState, ErrorState, LoadingState } from './ui'
+import { EmptyState, LoadingState } from './ui'
 
 const value = (item) => {
   if (item == null || item === '') return '—'
@@ -9,7 +9,6 @@ const value = (item) => {
   if (typeof item === 'object') return Object.entries(item).map(([key, val]) => `${key}: ${value(val)}`).join(' · ')
   return String(item)
 }
-const percent = (item) => item == null ? '—' : `${(Number(item) <= 1 ? Number(item) * 100 : Number(item)).toFixed(1)}%`
 const ratioPercent = (item) => item == null ? '—' : `${(Number(item) * 100).toFixed(1)}%`
 const tone = (item) => Number(item) < 0 ? 'negative' : 'positive'
 const list = (items) => Array.isArray(items) ? items : items == null ? [] : [items]
@@ -59,31 +58,33 @@ export function ProfitRoutesTab({ categories = [], selectedLeague }) {
 }
 
 function RouteCard({ route }) {
-  const recommendation = route.cfo_recommendation || route.recommendation
   return <article className="terminal-panel profit-route">
     <div className="panel-title"><div><div className="eyebrow">{route.transformation_id || 'TRANSFORMATION'}</div><h2>{route.name || 'Unnamed route'}</h2></div><span>{route.status ? `STATUS · ${route.status.replaceAll('_', ' ').toUpperCase()}` : (route.source ? `SOURCE · ${route.source}` : 'BACKEND EVALUATION')}</span></div>
     <div className="route-metrics metric-grid">
       <Metric label="Status" value={route.status ? route.status.replaceAll('_', ' ') : '—'} />
-      <Metric label="Expected net" value={value(route.expected_net_profit)} tone={tone(route.expected_net_profit)} />
-      <Metric label="ROI" value={ratioPercent(route.roi)} tone={tone(route.roi)} />
-      <Metric label="Theoretical ROI" value={ratioPercent(route.theoretical_roi)} />
-      <Metric label="Executable ROI" value={ratioPercent(route.executable_roi)} tone={tone(route.executable_roi)} />
-      <Metric label="Capital required" value={value(route.capital_required)} />
-      <Metric label="Profit / hour" value={value(route.profit_per_hour)} tone={tone(route.profit_per_hour)} />
-      <Metric label={`Capacity (${route.capacity_units || 'capital'})`} value={value(route.capacity)} />
-      <Metric label="Sets / hour" value={value(route.estimated_sets_per_hour)} />
-      <Metric label="Sets with budget" value={value(route.sets_possible_with_budget)} />
-      <Metric label="Market capacity" value={value(route.market_capacity)} />
-      <Metric label="Execution + sale" value={`${value(route.expected_execution_time)} + ${value(route.expected_sale_time)}`} />
+      <Metric label="Theoretical net (Chaos)" value={value(route.theoretical_net_profit)} tone={tone(route.theoretical_net_profit)} />
+      <Metric label="Executable net (Chaos)" value={value(route.executable_net_profit)} tone={tone(route.executable_net_profit)} />
+      <Metric label="Actual net (Chaos)" value={value(route.actual_net_profit)} tone={tone(route.actual_net_profit)} />
+      <Metric label="ROI (ratio)" value={ratioPercent(route.roi)} tone={tone(route.roi)} />
+      <Metric label="Theoretical ROI (ratio)" value={ratioPercent(route.theoretical_roi)} />
+      <Metric label="Executable ROI (ratio)" value={ratioPercent(route.executable_roi)} tone={tone(route.executable_roi)} />
+      <Metric label="Capital required (Chaos)" value={value(route.capital_required)} />
+      <Metric label="Profit / active hour (Chaos/h)" value={value(route.profit_per_active_hour)} tone={tone(route.profit_per_active_hour)} />
+      <Metric label="ROI / lock hour (ratio/h)" value={value(route.roi_per_lock_hour)} tone={tone(route.roi_per_lock_hour)} />
+      <Metric label={`Recommended capacity (${route.capacity_units || 'capital'})`} value={value(route.recommended_capacity ?? route.capacity)} />
+      <Metric label={`Budget capacity (${route.capacity_units || 'capital'})`} value={value(route.budget_capacity)} />
+      <Metric label={`Market capacity (${route.capacity_units || 'capital'})`} value={value(route.market_capacity)} />
+      <Metric label="Active execution (hours)" value={value(route.active_execution_time)} />
+      <Metric label="Capital lock / cycle (hours)" value={value(route.capital_lock_time)} />
     </div>
     <div className="route-columns">
       <RouteSection title="Inputs" items={route.inputs} /><RouteSection title="Costs" items={route.costs} /><RouteSection title="Outputs" items={route.outputs} />
-      <section><h3>Economics</h3><div className="raw-grid route-raw"><Raw label="Total input cost" item={route.total_input_cost} /><Raw label="Realistic output value" item={route.realistic_output_value} /><Raw label="Gross profit" item={route.gross_profit} /><Raw label="Divine-hour profit" item={route.profit_per_divine_hour} /></div></section>
-      <section><h3>Confidence / risk</h3><div className="raw-grid route-raw"><Raw label="Overall confidence" item={percent(route.confidence)} /><Raw label="Pricing confidence" item={percent(route.pricing_confidence)} /><Raw label="Strategy confidence" item={percent(route.strategy_confidence)} /><Raw label="Execution risk" item={value(route.execution_risk)} /></div></section>
+      <section><h3>Economics</h3><div className="raw-grid route-raw"><Raw label="Theoretical input cost (Chaos)" item={route.total_input_cost} /><Raw label="Theoretical output value (Chaos)" item={route.realistic_output_value} /><Raw label="Actual net (Chaos)" item={route.actual_net_profit} /></div></section>
+      <section><h3>Confidence / risk</h3><div className="raw-grid route-raw"><Raw label="Overall confidence (0–1)" item={route.confidence} /><Raw label="Pricing confidence (0–1)" item={route.pricing_confidence} /><Raw label="Strategy confidence (0–1)" item={route.strategy_confidence} /><Raw label="Execution risk (0–1)" item={route.execution_risk} /></div></section>
     </div>
     <div className="route-bottom">
       <section><h3>Reasons</h3>{list(route.reasons).length ? <ul className="dense-list">{list(route.reasons).map((reason, i) => <li key={i}><span className="signal-mark" />{value(reason)}</li>)}</ul> : <p className="muted small">No reasons supplied.</p>}</section>
-      <section><h3>Execution</h3>{route.execution_steps && <p className="small">{value(route.execution_steps)}</p>}<p className="muted small">Capacity: <strong>{value(route.capacity)}</strong> {route.capacity_units ? `(${route.capacity_units})` : ''} · Expected execution: <strong>{value(route.expected_execution_time)}</strong> · Expected sale: <strong>{value(route.expected_sale_time)}</strong></p>{route.capacity_horizon_hours > 0 && <p className="muted small">Repeatability horizon: <strong>{value(route.capacity_horizon_hours)}h</strong> · Assumptions: {value(route.capacity_assumptions)}</p>}{(recommendation || route.constraints) && <><h3 className="route-subhead">CFO guidance</h3><p className="small">{recommendation || '—'}</p>{route.constraints && <p className="muted small">Constraints: {value(route.constraints)}</p>}</>}</section>
+      <section><h3>Execution</h3>{route.execution_steps && <p className="small">{value(route.execution_steps)}</p>}<p className="muted small">Recommended capacity: <strong>{value(route.recommended_capacity ?? route.capacity)}</strong> {route.capacity_units ? `(${route.capacity_units})` : ''} · Active execution: <strong>{value(route.active_execution_time)}h</strong> · Capital lock / elapsed cycle: <strong>{value(route.capital_lock_time)}h</strong></p>{route.time_horizon_hours > 0 && <p className="muted small">Time horizon: <strong>{value(route.time_horizon_hours)}h</strong> · Assumptions: {value(route.capacity_assumptions)}</p>}</section>
     </div>
     <div className="route-provenance">PROVENANCE · {route.source || '—'} · VERIFIED VERSION · {route.verified_version || '—'}</div>
   </article>

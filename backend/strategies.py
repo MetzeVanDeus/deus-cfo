@@ -17,38 +17,50 @@ from opportunity import InvestableOpportunity
 
 
 class ProfitRoute(BaseModel):
-    """A priced, execution-aware result from one declarative transformation."""
+    """Execution-aware route values with explicit units.
+
+    Money fields are Chaos or Chaos/set; rates are dimensionless ratios or
+    Chaos/hour; durations are elapsed hours; capacities are complete units
+    named by ``capacity_units``; confidence fields are [0, 1].
+    """
+    model_config = {"extra": "forbid"}
+
     transformation_id: str
     name: str
     strategy_family: str = "transformation"
     status: str = "theoretical"
     league: str | None = None
     category: str = "Transformation"
-    total_input_cost: float
-    realistic_output_value: float
-    gross_profit: float
-    expected_net_profit: float
-    roi: float
-    theoretical_roi: float | None = None
-    executable_roi: float | None = None
-    capital_required: float
-    capacity: float
+    total_input_cost: float = Field(description="Chaos for one base batch")
+    realistic_output_value: float = Field(description="Expected liquidated Chaos for one base batch")
+    gross_profit: float = Field(description="Chaos per base batch before explicit execution friction")
+    expected_net_profit: float = Field(description="Safe expected net Chaos per base batch")
+    theoretical_net_profit: float | None = Field(default=None, description="Theoretical expected net Chaos per base batch")
+    executable_net_profit: float | None = Field(default=None, description="Exact-depth executable net Chaos per base batch")
+    actual_net_profit: float | None = Field(default=None, description="Observed journal net Chaos per completed batch")
+    roi: float = Field(description="Dimensionless net return / input capital")
+    theoretical_roi: float | None = Field(default=None, description="Dimensionless theoretical ROI from reference prices")
+    executable_roi: float | None = Field(default=None, description="Dimensionless ROI from exact executable depth")
+    capital_required: float = Field(description="Chaos required for one base batch")
+    capacity: float = Field(description="Recommended complete batches in capacity_units")
     capacity_units: str = "capital"
-    expected_execution_time: float
-    expected_sale_time: float
-    profit_per_hour: float
-    profit_per_divine_hour: float = 0.0
-    profit_per_set: float | None = None
-    sets_possible_with_budget: int = 0
-    estimated_sets_per_hour: float = 0.0
-    market_capacity: int = 0
-    capacity_horizon_hours: float = 0.0
+    active_execution_time: float = Field(description="Hands-on execution effort in hours per base batch")
+    capital_lock_time: float = Field(description="Elapsed hours until capital can be released per base batch")
+    elapsed_cycle_time: float = Field(description="Elapsed cycle duration in hours used for ROI/time and allocator duration")
+    profit_per_active_hour: float = Field(description="Expected net Chaos per active execution hour")
+    roi_per_lock_hour: float = Field(description="Dimensionless ROI divided by capital_lock_time in hours")
+    profit_per_set: float | None = Field(default=None, description="Expected net Chaos per complete set, when applicable")
+    budget_capacity: int = Field(default=0, description="Largest positive-safe batch fitting the stated Chaos budget")
+    recommended_capacity: int = Field(default=0, description="Largest positive-safe batch recommended after all constraints")
+    estimated_sets_per_lock_hour: float = Field(default=0.0, description="Complete sets per capital-lock hour")
+    market_capacity: int = Field(default=0, description="Largest positive-safe batch supported by exact market depth")
+    time_horizon_hours: float = Field(default=0.0, description="Evaluation horizon in elapsed hours")
     capacity_assumptions: list[str] = Field(default_factory=list)
     reasons: list[str] = Field(default_factory=list)
-    confidence: float = 0.0
-    pricing_confidence: float = 0.0
-    strategy_confidence: float = 0.0
-    execution_risk: float = 0.0
+    confidence: float = Field(default=0.0, description="Overall confidence in [0, 1]")
+    pricing_confidence: float = Field(default=0.0, description="Price evidence confidence in [0, 1]")
+    strategy_confidence: float = Field(default=0.0, description="Transformation-definition confidence in [0, 1]")
+    execution_risk: float = Field(default=0.0, description="Execution risk in [0, 1]")
     liquidity: dict[str, Any] = Field(default_factory=dict)
     source: str = "unverified"
     verified_version: str = "unverified"
@@ -70,7 +82,7 @@ class ProfitRoute(BaseModel):
         """Adapt this route to the existing allocator contract."""
         if chaos_per_divine <= 0:
             raise ValueError("positive chaos_per_divine is required")
-        duration = max(0.25, self.expected_execution_time + self.expected_sale_time)
+        duration = max(0.25, self.elapsed_cycle_time)
         now = datetime.now(timezone.utc)
         expires_at = (now + timedelta(hours=duration)).isoformat(timespec="seconds")
         created_at = now.isoformat(timespec="seconds")
@@ -89,7 +101,7 @@ class ProfitRoute(BaseModel):
             realistic_exit_price=exit_chaos,
             expected_return=self.roi * 100,
             expected_profit_per_unit=expected_profit_chaos / chaos_per_divine,
-            expected_profit_per_divine_hour=self.profit_per_divine_hour,
+            expected_roi_per_lock_hour=self.roi_per_lock_hour,
             win_probability=max(0.0, min(1.0, self.confidence)),
             expected_duration=duration,
             duration_distribution=[duration],
@@ -341,14 +353,9 @@ class TransformationStrategyProvider:
             confidence = pricing_confidence * strategy_confidence * (1 - execution_risk)
             source_values = {str(info["source"]) for info in priced}
             source = next(iter(source_values)) if len(source_values) == 1 else "mixed"
-            capacity = float(recipe["max_batch"])
-            volumes = [
-                info["volume"] / item["quantity"]
-                for item, info in zip(all_costs, cost_info, strict=True)
-                if info.get("volume") is not None and info["volume"] > 0
-            ]
-            if volumes:
-                capacity = min(capacity, max(0.0, min(volumes)))
+            # Aggregate snapshot volume is reference liquidity, not executable depth.
+            market_capacity = budget_capacity = recommended_capacity = 0
+
             component_volumes = {
                 f"{item.get('category') or recipe['category']}:{item['item']}": info["volume"]
                 for item, info in zip(components, priced, strict=True)
@@ -369,7 +376,7 @@ class TransformationStrategyProvider:
                 reasons.append("pricing confidence is below 70%")
             if recipe["manual_actions"]:
                 reasons.append(f"{len(recipe['manual_actions'])} manual action(s) required")
-            chaos_per_divine = float(context.get("chaos_per_divine", 0) or 0)
+            reasons.append("exact executable depth unavailable; executable capacity is zero")
             routes.append(ProfitRoute(
                 transformation_id=recipe["id"],
                 name=recipe["name"],
@@ -381,13 +388,23 @@ class TransformationStrategyProvider:
                 realistic_output_value=output_value,
                 gross_profit=output_value - cost,
                 expected_net_profit=net,
+                theoretical_net_profit=net,
+                executable_net_profit=None,
                 roi=net / cost,
+                theoretical_roi=net / cost,
                 capital_required=cost,
-                capacity=capacity,
-                expected_execution_time=duration,
-                expected_sale_time=sale_time,
-                profit_per_hour=net / total_time,
-                profit_per_divine_hour=(net / chaos_per_divine) / total_time if chaos_per_divine > 0 else 0.0,
+                capacity=float(recommended_capacity),
+                active_execution_time=duration,
+                capital_lock_time=total_time,
+                elapsed_cycle_time=total_time,
+                profit_per_active_hour=net / max(0.25, duration),
+                roi_per_lock_hour=(net / cost) / total_time,
+                budget_capacity=budget_capacity,
+                recommended_capacity=recommended_capacity,
+                estimated_sets_per_lock_hour=0.0,
+                market_capacity=market_capacity,
+                time_horizon_hours=float(context.get("capacity_horizon_hours", 0) or 0),
+                capacity_assumptions=["aggregate reference volume is not exact executable depth"],
                 confidence=confidence,
                 pricing_confidence=pricing_confidence,
                 strategy_confidence=strategy_confidence,
@@ -484,13 +501,14 @@ class DivCardRecipe(BaseModel):
     expected_sale_time_hours: float = 0.25
     execution_risk: float = 0.0
     strategy_confidence: float = 1.0
+    max_batch: int = 1
 
 _DIV_CARD_ALLOWED_KEYS = {
     "id", "card", "set_size", "card_market_key", "reward_type", "reward_item",
     "reward_quantity", "reward_market_key", "variant", "corrupted", "item_level",
     "special_conditions", "deterministic", "trusted_distribution", "outcomes",
     "verified_version", "poe_patch", "source", "manual_actions", "expected_execution_time_hours",
-    "expected_sale_time_hours", "execution_risk", "strategy_confidence",
+    "expected_sale_time_hours", "execution_risk", "strategy_confidence", "max_batch",
 }
 
 
@@ -550,6 +568,7 @@ def validate_div_card_recipe(record: Mapping[str, Any]) -> dict[str, Any]:
     result.setdefault("expected_sale_time_hours", 0.25)
     result.setdefault("execution_risk", 0.0)
     result.setdefault("strategy_confidence", 1.0)
+    result.setdefault("max_batch", 1)
     if not isinstance(result["trusted_distribution"], bool) or not isinstance(result["outcomes"], list):
         raise ValueError("trusted_distribution and outcomes are invalid")
     if result["deterministic"] and result["outcomes"]:
@@ -576,6 +595,8 @@ def validate_div_card_recipe(record: Mapping[str, Any]) -> dict[str, Any]:
     for field in ("expected_execution_time_hours", "expected_sale_time_hours", "execution_risk", "strategy_confidence"):
         if not isinstance(result[field], (int, float)) or result[field] < 0:
             raise ValueError(f"{field} must be non-negative")
+    if not isinstance(result["max_batch"], int) or result["max_batch"] < 1:
+        raise ValueError("max_batch must be a positive integer")
     if result["execution_risk"] > 1 or result["strategy_confidence"] > 1:
         raise ValueError("execution_risk and strategy_confidence must be at most 1")
     return result
@@ -710,24 +731,88 @@ def _consume_depth(levels: Any, quantity: float, *, buy: bool) -> tuple[float, f
 
 def _quote_info(execution_prices: Mapping[str, Any], key: str, *, side: str) -> dict[str, Any] | None:
     quote = execution_prices.get(key)
-    if not isinstance(quote, Mapping):
+    if not isinstance(quote, Mapping) or not isinstance(quote.get("stale", False), bool) or quote.get("stale", False):
         return None
     levels = quote.get("buy_levels" if side == "buy" else "sell_levels")
     fee = quote.get("buy_fee_rate" if side == "buy" else "sell_fee_rate", quote.get("fee_rate", 0))
-    if not isinstance(fee, (int, float)) or not 0 <= fee < 1:
+    if not isinstance(fee, (int, float)) or isinstance(fee, bool) or not 0 <= fee < 1:
         return None
-    if not isinstance(quote.get("observed_at"), str) or not quote["observed_at"]:
+    if not isinstance(levels, list) or not levels:
+        return None
+    observed_at = quote.get("observed_at")
+    if not isinstance(observed_at, str) or not observed_at:
+        return None
+    try:
+        parsed_observed_at = datetime.fromisoformat(observed_at.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed_observed_at.tzinfo is None:
         return None
     confidence = quote.get("confidence")
-    if not isinstance(confidence, (int, float)) or not 0 <= confidence <= 1:
+    if not isinstance(confidence, (int, float)) or isinstance(confidence, bool) or not 0 <= confidence <= 1:
         return None
     source = quote.get("source")
     if not isinstance(source, str) or not source:
         return None
-    return {"levels": levels, "fee": float(fee), "observed_at": quote["observed_at"],
-            "confidence": float(confidence), "source": source}
+    return {"levels": levels, "fee": float(fee), "observed_at": observed_at,
+            "confidence": float(confidence), "source": source, "stale": quote.get("stale", False)}
 
+def evaluate_batch_ladder(
+    *,
+    set_size: int,
+    outcomes: Sequence[Mapping[str, Any]],
+    buy_quote: Mapping[str, Any] | None,
+    sell_quotes: Sequence[Mapping[str, Any] | None],
+    max_batch: int,
+    budget_chaos: float,
+    time_horizon_hours: float,
+    capital_lock_time: float,
+) -> list[dict[str, Any]]:
+    """Evaluate mutually exclusive outcomes conditionally, then weight EV.
 
+    Each branch must have depth for its full conditional reward quantity;
+    branches are not sold simultaneously. Expected quantities are retained
+    for audit while conditional liquidation values are probability-weighted.
+    """
+    if not buy_quote or len(sell_quotes) != len(outcomes) or any(quote is None for quote in sell_quotes):
+        return []
+    ladder: list[dict[str, Any]] = []
+    for batch_size in range(1, max(0, int(max_batch)) + 1):
+        buy_fill = _consume_depth(buy_quote["levels"], batch_size * set_size, buy=True)
+        if buy_fill is None:
+            break
+        input_cost = buy_fill[0] * (1 + float(buy_quote["fee"]))
+        if budget_chaos > 0 and input_cost > budget_chaos + 1e-9:
+            break
+        if batch_size * capital_lock_time > time_horizon_hours + 1e-9:
+            break
+        output_value = 0.0
+        liquidation_values: list[float] = []
+        outcome_capacities: list[int] = []
+        expected_quantities: list[float] = []
+        for outcome, quote in zip(outcomes, sell_quotes, strict=True):
+            sell_fill = _consume_depth(quote["levels"], batch_size * float(outcome["reward_quantity"]), buy=False)
+            if sell_fill is None:
+                return ladder
+            liquidation = sell_fill[0] * (1 - float(quote["fee"]))
+            liquidation_values.append(liquidation)
+            expected_quantities.append(batch_size * float(outcome["reward_quantity"]) * float(outcome["probability"]))
+            outcome_capacities.append(int(sum(float(level["quantity"]) for level in quote["levels"]) // float(outcome["reward_quantity"])))
+            output_value += float(outcome["probability"]) * liquidation
+        net = output_value - input_cost
+        if net <= 0:
+            break
+        ladder.append({
+            "batch_size": batch_size,
+            "input_cost_chaos": input_cost,
+            "executable_output_chaos": output_value,
+            "safe_net_chaos": net,
+            "roi": net / input_cost,
+            "liquidation_values_chaos": liquidation_values,
+            "outcome_capacities": outcome_capacities,
+            "expected_quantities": expected_quantities,
+        })
+    return ladder
 class DivinationCardStrategyProvider:
     """Evaluate deterministic/trusted div-card sets using exact market keys and depth."""
 
@@ -735,16 +820,13 @@ class DivinationCardStrategyProvider:
         self.registry = registry
 
     def evaluate(self, context: Mapping[str, Any]) -> Sequence[ProfitRoute]:
-        requested_category = context.get("category")
-        if requested_category not in (None, "DivinationCard"):
-            return []
         prices = context.get("prices", {})
         records = context.get("price_records", {})
         execution_prices = context.get("execution_prices", {})
         active_version = context.get("active_registry_version")
         active_poe_patch = context.get("active_poe_patch")
         league = context.get("league")
-        horizon = float(context.get("capacity_horizon_hours", 24) or 24)
+        horizon = max(0.0, float(context.get("capacity_horizon_hours", 24) or 24))
         budget = context.get("budget_chaos")
         if budget is None and context.get("bankroll") is not None:
             budget = float(context.get("bankroll", 0) or 0) * float(context.get("chaos_per_divine", 1) or 1)
@@ -785,133 +867,120 @@ class DivinationCardStrategyProvider:
                 (theoretical_output - theoretical_cost) / theoretical_cost
                 if theoretical_cost and theoretical_output is not None else None
             )
+            theoretical_net = (theoretical_output * (1 - float(recipe.get("sale_fee_rate", 0))) - theoretical_cost) if theoretical_output is not None and theoretical_cost else None
+            active_time = float(recipe["expected_execution_time_hours"])
+            capital_lock_time = max(0.25, active_time + float(recipe["expected_sale_time_hours"]))
             buy_quote = _quote_info(execution_prices, recipe["card_market_key"], side="buy")
-            buy_fill = _consume_depth(buy_quote["levels"], recipe["set_size"], buy=True) if buy_quote else None
-            executable_cost = buy_fill[0] * (1 + buy_quote["fee"]) if buy_fill and buy_quote else None
-            sell_fills = []
-            sell_capacity: list[int] = []
-            quote_confidences = [buy_quote["confidence"]] if buy_quote else []
-            quote_sources = [buy_quote["source"]] if buy_quote else []
-            quote_times = [buy_quote["observed_at"]] if buy_quote else []
-            if not buy_quote or buy_fill is None:
+            sell_quotes = [_quote_info(execution_prices, outcome["reward_market_key"], side="sell") for outcome in outcomes]
+            if not buy_quote:
                 reasons.append(f"missing buy depth: {recipe['card_market_key']}")
-            if buy_quote:
-                for outcome in outcomes:
-                    sell_quote = _quote_info(execution_prices, outcome["reward_market_key"], side="sell")
-                    sell_fill = _consume_depth(sell_quote["levels"], float(outcome["reward_quantity"]), buy=False) if sell_quote else None
-                    if sell_fill is None or sell_quote is None:
-                        reasons.append(f"missing sell bid depth: {outcome['reward_market_key']}")
-                        sell_fills = []
+            for outcome, quote in zip(outcomes, sell_quotes, strict=True):
+                if not quote:
+                    reasons.append(f"missing sell bid depth: {outcome['reward_market_key']}")
+            first_buy = _consume_depth(buy_quote["levels"], recipe["set_size"], buy=True) if buy_quote else None
+            executable_cost = first_buy[0] * (1 + buy_quote["fee"]) if first_buy and buy_quote else None
+            executable_output = None
+            first_liquidations: list[float] = []
+            if first_buy and buy_quote and all(sell_quotes):
+                executable_output = 0.0
+                for outcome, quote in zip(outcomes, sell_quotes, strict=True):
+                    fill = _consume_depth(quote["levels"], float(outcome["reward_quantity"]), buy=False)
+                    if fill is None:
+                        executable_output = None
                         break
-                    sell_fills.append((float(outcome["probability"]), sell_fill[0] * (1 - sell_quote["fee"])))
-                    sell_capacity.append(int(sum(float(level["quantity"]) for level in sell_quote["levels"]) // float(outcome["reward_quantity"])))
-                    quote_confidences.append(sell_quote["confidence"])
-                    quote_sources.append(sell_quote["source"])
-                    quote_times.append(sell_quote["observed_at"])
-            executable_output = sum(value for _, value in sell_fills) if sell_fills and len(sell_fills) == len(outcomes) else None
+                    liquidation = fill[0] * (1 - quote["fee"])
+                    first_liquidations.append(liquidation)
+                    executable_output += float(outcome["probability"]) * liquidation
             executable_roi = (
                 (executable_output - executable_cost) / executable_cost
                 if executable_cost and executable_output is not None else None
             )
-            market_capacity = 0
-            if buy_quote and buy_fill and sell_capacity:
-                buy_capacity = int(sum(float(level["quantity"]) for level in buy_quote["levels"]) // recipe["set_size"])
-                market_capacity = min([buy_capacity, *sell_capacity])
-            total_time = max(0.25, float(recipe["expected_execution_time_hours"]) + float(recipe["expected_sale_time_hours"]))
-            sets_per_hour = 1.0 / total_time if market_capacity else 0.0
-            budget_sets = int(budget // executable_cost) if executable_cost and executable_cost > 0 else 0
-            time_sets = int(sets_per_hour * horizon)
-            sets_possible = min(budget_sets, market_capacity, time_sets) if market_capacity else 0
-            net = (executable_output - executable_cost) if executable_output is not None and executable_cost is not None else 0.0
-            if buy_quote and executable_output is not None:
-                reasons.append("depth-aware executable buy and liquidation quotes")
+            market_ladder = evaluate_batch_ladder(
+                set_size=recipe["set_size"], outcomes=outcomes, buy_quote=buy_quote,
+                sell_quotes=sell_quotes, max_batch=recipe.get("max_batch", 1), budget_chaos=0,
+                time_horizon_hours=float("inf"), capital_lock_time=capital_lock_time,
+            )
+            budget_ladder = evaluate_batch_ladder(
+                set_size=recipe["set_size"], outcomes=outcomes, buy_quote=buy_quote,
+                sell_quotes=sell_quotes, max_batch=recipe.get("max_batch", 1), budget_chaos=budget,
+                time_horizon_hours=float("inf"), capital_lock_time=capital_lock_time,
+            )
+            recommended_ladder = evaluate_batch_ladder(
+                set_size=recipe["set_size"], outcomes=outcomes, buy_quote=buy_quote,
+                sell_quotes=sell_quotes, max_batch=recipe.get("max_batch", 1), budget_chaos=budget,
+                time_horizon_hours=horizon, capital_lock_time=capital_lock_time,
+            )
+            market_capacity = len(market_ladder)
+            budget_capacity = len(budget_ladder) if budget > 0 else market_capacity
+            recommended_capacity = len(recommended_ladder)
+            net = float(executable_output - executable_cost) if executable_output is not None and executable_cost is not None else 0.0
+            if executable_output is not None:
+                reasons.append("depth-aware executable buy and probability-weighted liquidation quotes")
             else:
                 reasons.append("executable depth unavailable; scalable capacity is zero")
             if theoretical_roi is not None and executable_output is None:
                 reasons.append("theoretical pricing is available; execution remains unverified")
-            if net > 0:
-                reasons.append("positive executable set profit")
-            else:
-                reasons.append("no positive executable profit")
+            reasons.append("positive executable set profit" if net > 0 else "no positive executable profit")
+            if market_capacity < 1 and buy_quote and all(sell_quotes):
+                reasons.append("no positive-safe batch remains after cumulative depth evaluation")
             status = (
-                "executable" if executable_output is not None and executable_cost is not None and market_capacity > 0 and net > 0
+                "executable" if executable_output is not None and executable_cost is not None and market_capacity > 0
                 else "non_executable" if executable_output is not None and executable_cost is not None
                 else "theoretical" if theoretical_roi is not None
                 else "insufficient_evidence"
             )
+            quote_confidences = [buy_quote["confidence"]] + [quote["confidence"] for quote in sell_quotes if quote] if buy_quote else []
+            quote_sources = [buy_quote["source"]] + [quote["source"] for quote in sell_quotes if quote] if buy_quote else []
+            quote_times = [buy_quote["observed_at"]] + [quote["observed_at"] for quote in sell_quotes if quote] if buy_quote else []
             pricing_confidence = min(quote_confidences) if quote_confidences else 0.0
             strategy_confidence = float(recipe["strategy_confidence"])
             confidence = pricing_confidence * strategy_confidence if quote_confidences else 0.0
             source = next(iter(set(quote_sources)), recipe["source"]) if quote_sources else recipe["source"]
             input_cost = executable_cost if executable_cost is not None else theoretical_cost
             output_value = executable_output if executable_output is not None else theoretical_output
+            outcome_outputs = []
+            outcome_liquidation = []
+            for index, outcome in enumerate(outcomes):
+                quote = sell_quotes[index]
+                capacity = int(sum(float(level["quantity"]) for level in quote["levels"]) // float(outcome["reward_quantity"])) if quote else 0
+                outcome_outputs.append({**outcome, "liquidation_capacity_sets": capacity})
+                outcome_liquidation.append({"probability": float(outcome["probability"]), "capacity_sets": capacity})
             route = ProfitRoute(
-                transformation_id=recipe["id"],
-                name=f"{recipe['card']} set arbitrage",
-                strategy_family="divination_card",
-                status=status,
-                league=league,
-                category="DivinationCard",
-                total_input_cost=float(input_cost or 0),
-                realistic_output_value=float(output_value or 0),
-                gross_profit=float((output_value or 0) - (input_cost or 0)),
-                expected_net_profit=float(net),
-                roi=float(executable_roi or 0),
-                theoretical_roi=theoretical_roi,
-                executable_roi=executable_roi,
-                capital_required=float(executable_cost or theoretical_cost or 0),
-                capacity=float(market_capacity),
-                capacity_units="sets",
-                expected_execution_time=float(recipe["expected_execution_time_hours"]),
-                expected_sale_time=float(recipe["expected_sale_time_hours"]),
-                profit_per_hour=float(net / total_time),
-                profit_per_divine_hour=(net / float(context["chaos_per_divine"]) / total_time
-                                        if context.get("chaos_per_divine", 0) > 0 else 0.0),
-                profit_per_set=float(net),
-                sets_possible_with_budget=sets_possible,
-                estimated_sets_per_hour=float(sets_per_hour),
-                market_capacity=market_capacity,
-                capacity_horizon_hours=horizon,
-                capacity_assumptions=[
-                    "capacity is measured in complete sets",
-                    "buy and sell depth are exact quote levels",
-                    "unknown depth produces zero scalable sets",
-                ],
-                reasons=list(reasons),
-                confidence=confidence,
-                pricing_confidence=pricing_confidence,
-                strategy_confidence=strategy_confidence,
-                execution_risk=float(recipe["execution_risk"] if buy_quote else 1.0),
-                liquidity={
-                    "tier": validation.liquidity_tier(float(market_capacity)),
-                    "volume": market_capacity,
-                    "capacity_units": "sets",
-                },
-                source=source,
-                verified_version=recipe["verified_version"],
-                poe_patch=recipe["poe_patch"],
+                transformation_id=recipe["id"], name=f"{recipe['card']} set arbitrage",
+                strategy_family="divination_card", status=status, league=league, category="DivinationCard",
+                total_input_cost=float(input_cost or 0), realistic_output_value=float(output_value or 0),
+                gross_profit=float((output_value or 0) - (input_cost or 0)), expected_net_profit=net,
+                roi=float(executable_roi or 0), theoretical_roi=theoretical_roi, executable_roi=executable_roi,
+                capital_required=float(executable_cost or theoretical_cost or 0), capacity=float(recommended_capacity),
+                theoretical_net_profit=theoretical_net,
+                executable_net_profit=net if executable_output is not None else None,
+                capacity_units="sets", active_execution_time=active_time, capital_lock_time=capital_lock_time,
+                elapsed_cycle_time=capital_lock_time,
+                profit_per_active_hour=float(net / max(0.25, active_time)),
+                roi_per_lock_hour=float((executable_roi or 0) / capital_lock_time),
+                profit_per_set=float(net), budget_capacity=budget_capacity,
+                recommended_capacity=recommended_capacity, estimated_sets_per_lock_hour=float(1 / capital_lock_time) if market_capacity else 0.0,
+                market_capacity=market_capacity, time_horizon_hours=horizon,
+                capacity_assumptions=["capacity is measured in complete sets", "buy and sell depth are consumed cumulatively", "unknown or stale depth produces zero scalable sets"],
+                reasons=list(reasons), confidence=confidence, pricing_confidence=pricing_confidence,
+                strategy_confidence=strategy_confidence, execution_risk=float(recipe["execution_risk"] if buy_quote else 1.0),
+                liquidity={"tier": validation.liquidity_tier(float(market_capacity)), "volume": market_capacity, "capacity_units": "sets", "outcomes": outcome_liquidation},
+                source=source, verified_version=recipe["verified_version"], poe_patch=recipe["poe_patch"],
                 verification_metadata={
-                    "registry_version": self.registry.version,
-                    "registry_source": self.registry.source,
-                    "definition_source": recipe["source"],
-                    "verified_version": recipe["verified_version"],
-                    "poe_patch": recipe["poe_patch"],
-                    "active_poe_patch": active_poe_patch,
-                    "manual_actions": list(recipe["manual_actions"]),
-                    "variant": recipe["variant"],
-                    "corrupted": recipe["corrupted"],
-                    "item_level": recipe["item_level"],
-                    "special_conditions": list(recipe["special_conditions"]),
-                    "card_market_key": recipe["card_market_key"],
+                    "registry_version": self.registry.version, "registry_source": self.registry.source,
+                    "definition_source": recipe["source"], "verified_version": recipe["verified_version"],
+                    "poe_patch": recipe["poe_patch"], "active_poe_patch": active_poe_patch,
+                    "manual_actions": list(recipe["manual_actions"]), "variant": recipe["variant"],
+                    "corrupted": recipe["corrupted"], "item_level": recipe["item_level"],
+                    "special_conditions": list(recipe["special_conditions"]), "card_market_key": recipe["card_market_key"],
                     "reward_market_keys": [outcome["reward_market_key"] for outcome in outcomes],
-                    "quote_sources": sorted(set(quote_sources)),
-                    "quote_timestamps": sorted(set(quote_times)),
+                    "quote_sources": sorted(set(quote_sources)), "quote_timestamps": sorted(set(quote_times)),
+                    "outcome_liquidation": outcome_liquidation, "batch_ladder": recommended_ladder,
                     "eligibility": "deterministic" if recipe["deterministic"] else "trusted_finite_distribution",
                 },
                 inputs=[{"item": recipe["card"], "market_key": recipe["card_market_key"], "quantity": recipe["set_size"]}],
                 costs=[{"item": recipe["card"], "market_key": recipe["card_market_key"], "quantity": recipe["set_size"], "side": "buy"}],
-                outputs=[dict(outcome) for outcome in outcomes],
-                execution_steps=list(recipe["manual_actions"]),
+                outputs=outcome_outputs, execution_steps=list(recipe["manual_actions"]),
             )
             routes.append(route)
         return routes
@@ -923,12 +992,12 @@ class DivinationCardStrategyProvider:
         return [
             route.to_investable(
                 status="Validated",
-                max_batch=max(1, route.market_capacity),
+                max_batch=max(1, route.recommended_capacity),
                 bankroll=bankroll,
                 chaos_per_divine=chaos_per_divine,
             )
             for route in self.evaluate(context)
-            if route.expected_net_profit > 0 and route.market_capacity > 0 and route.sets_possible_with_budget > 0
+            if route.expected_net_profit > 0 and route.market_capacity > 0 and route.recommended_capacity > 0
             and definitions[route.transformation_id]["deterministic"] in (True, False)
         ]
 
@@ -1180,7 +1249,6 @@ def _deferred_route(
     output_value = sum(float(item["quantity"]) * info["price"] for item, info in zip(outputs, output_info, strict=True)) * (1 - discount)
     sale_fee = float(record.get("sale_fee_rate", 0))
     net = output_value * (1 - sale_fee) - total_cost
-    total_time = max(0.25, float(record["expected_execution_time_hours"]) + float(record.get("expected_sale_time_hours", 0)))
     confidence_values = [item["confidence"] for item in prices if item is not None]
     pricing_confidence = min(confidence_values)
     strategy_confidence = float(record.get("strategy_confidence", 1.0))
@@ -1191,7 +1259,11 @@ def _deferred_route(
     source_values = sorted({str(info["source"]) for info in prices})
     source = source_values[0] if len(source_values) == 1 else "mixed"
     route_status = "manual_only" if manual else "theoretical"
-    chaos_per_divine = float(context.get("chaos_per_divine", 0) or 0)
+    active_time = float(record["expected_execution_time_hours"])
+    capital_lock_time = max(0.25, active_time + float(record.get("expected_sale_time_hours", 0)))
+    # Snapshot volumes are reference liquidity; no exact executable ladder exists here.
+    market_capacity = budget_capacity = recommended_capacity = 0
+
     reasons = [
         "verified deterministic transformation",
         f"definition source: {record['source']} ({record['verified_version']})",
@@ -1199,6 +1271,7 @@ def _deferred_route(
     ]
     if manual:
         reasons.append("manual-only execution; automatic allocation is disabled")
+    reasons.append("exact executable depth unavailable; executable capacity is zero")
     return ProfitRoute(
         transformation_id=str(route_id or record["id"]),
         name=str(name or record["name"]),
@@ -1210,16 +1283,25 @@ def _deferred_route(
         realistic_output_value=output_value,
         gross_profit=output_value - total_cost,
         expected_net_profit=net,
+        theoretical_net_profit=net,
+        executable_net_profit=None,
         roi=net / total_cost if total_cost > 0 else 0.0,
         theoretical_roi=net / total_cost if total_cost > 0 else None,
         executable_roi=None,
         capital_required=total_cost,
-        capacity=max(0.0, capacity),
+        capacity=float(recommended_capacity),
         capacity_units="items",
-        expected_execution_time=float(record["expected_execution_time_hours"]),
-        expected_sale_time=float(record.get("expected_sale_time_hours", 0)),
-        profit_per_hour=net / total_time,
-        profit_per_divine_hour=(net / chaos_per_divine) / total_time if chaos_per_divine > 0 else 0.0,
+        active_execution_time=active_time,
+        capital_lock_time=capital_lock_time,
+        elapsed_cycle_time=capital_lock_time,
+        profit_per_active_hour=net / max(0.25, active_time),
+        roi_per_lock_hour=(net / total_cost if total_cost > 0 else 0.0) / capital_lock_time,
+        budget_capacity=budget_capacity,
+        recommended_capacity=recommended_capacity,
+        estimated_sets_per_lock_hour=0.0,
+        market_capacity=market_capacity,
+        time_horizon_hours=float(context.get("capacity_horizon_hours", 0) or 0),
+        capacity_assumptions=["aggregate reference volume is not exact executable depth"],
         reasons=reasons,
         confidence=confidence,
         pricing_confidence=pricing_confidence,

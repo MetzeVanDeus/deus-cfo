@@ -106,7 +106,7 @@ def test_unknown_depth_is_unscalable_and_not_discoverable():
     provider = DivinationCardStrategyProvider(DivCardRegistry([recipe()], version="3.0", source="test"))
     route = provider.evaluate(market_context(depth=False))[0]
     assert route.market_capacity == 0
-    assert route.sets_possible_with_budget == 0
+    assert route.recommended_capacity == 0
     assert route.executable_roi is None
     assert provider.discover(market_context(depth=False)) == []
     assert any("depth unavailable" in reason for reason in route.reasons)
@@ -123,8 +123,8 @@ def test_depth_pricing_exposes_theoretical_and_executable_roi_and_repeatability(
     assert route.executable_roi == pytest.approx(9.25 / 24)
     assert route.capacity_units == "sets"
     assert route.market_capacity == 1
-    assert route.sets_possible_with_budget == 1
-    assert route.estimated_sets_per_hour == pytest.approx(0.5)
+    assert route.budget_capacity == 1
+    assert route.estimated_sets_per_lock_hour == pytest.approx(0.5)
     assert route.verification_metadata["card_market_key"] == "DivinationCard:test-card"
     assert provider.discover(market_context())[0].strategy_type == "divination_card"
 
@@ -336,7 +336,7 @@ def test_capital_planning_receives_card_opportunity(monkeypatch, tmp_path):
         captured["candidates"] = []
         asyncio.run(main.create_capital_plan(request))
         assert not any(item.strategy_type == "divination_card" for item in captured["candidates"])
-    assert card.metadata["profit_route"]["sets_possible_with_budget"] == 1
+    assert card.metadata["profit_route"]["recommended_capacity"] == 1
 
 def test_collector_database_and_market_context_preserve_execution_quote(monkeypatch, tmp_path):
     class Response:
@@ -523,3 +523,61 @@ def test_trade_depth_collector_persists_adapter_quotes(monkeypatch, tmp_path):
     assert json.loads(latest["DivinationCard"][0]["execution_quote"])["source"] == "pathofexile_trade_api"
     orb = next(row for row in latest["Currency"] if row["item_id"] == "test-orb")
     assert json.loads(orb["execution_quote"])["sell_levels"][0]["quantity"] == 10
+
+def test_finite_outcome_executable_value_is_probability_weighted():
+    card_recipe = recipe(
+        deterministic=False,
+        trusted_distribution=True,
+        outcomes=[
+            {"reward_item": "Common", "reward_quantity": 10, "reward_market_key": "Currency:common", "probability": 0.25},
+            {"reward_item": "Rare", "reward_quantity": 10, "reward_market_key": "Currency:rare", "probability": 0.75},
+        ],
+    )
+    context = market_context()
+    context["prices"] = {
+        "DivinationCard:test-card": 5,
+        "Currency:common": 10,
+        "Currency:rare": 2,
+    }
+    context["execution_prices"] = {
+        "DivinationCard:test-card": {"buy_levels": [{"price": 6, "quantity": 4}], "fee_rate": 0, "observed_at": "2026-08-15T00:00:00Z", "confidence": 1, "source": "test"},
+        "Currency:common": {"sell_levels": [{"price": 10, "quantity": 10}], "fee_rate": 0, "observed_at": "2026-08-15T00:00:00Z", "confidence": 1, "source": "test"},
+        "Currency:rare": {"sell_levels": [{"price": 2, "quantity": 10}], "fee_rate": 0, "observed_at": "2026-08-15T00:00:00Z", "confidence": 1, "source": "test"},
+    }
+    route = DivinationCardStrategyProvider(DivCardRegistry([card_recipe], version="3.0", source="test")).evaluate(context)[0]
+    assert route.realistic_output_value == pytest.approx(40)
+    assert route.executable_net_profit == pytest.approx(16)
+
+
+def test_cumulative_depth_ladder_worsens_larger_batch_economics():
+    card_recipe = recipe(max_batch=2)
+    context = market_context()
+    context["execution_prices"]["DivinationCard:test-card"]["buy_levels"] = [
+        {"price": 6, "quantity": 4}, {"price": 7, "quantity": 4},
+    ]
+    context["execution_prices"]["Currency:test-orb"]["sell_levels"] = [
+        {"price": 4, "quantity": 10}, {"price": 3, "quantity": 10},
+    ]
+    route = DivinationCardStrategyProvider(DivCardRegistry([card_recipe], version="3.0", source="test")).evaluate(context)[0]
+    ladder = route.verification_metadata["batch_ladder"]
+    assert len(ladder) == 2
+    assert ladder[1]["roi"] < ladder[0]["roi"]
+    assert route.market_capacity == 2
+    assert route.recommended_capacity == 2
+
+def test_flat_market_context_preserves_stale_execution_marker():
+    context = main._latest_market_context({
+        "DivinationCard": [{
+            "item_id": "test-card", "item_name": "Test Card", "price_chaos": 5,
+            "stale": True,
+            "buy_levels": [{"price": 6, "quantity": 4}],
+            "observed_at": "2026-08-15T00:00:00Z", "confidence": 0.9,
+            "source": "test",
+        }],
+    })
+    assert context["execution_prices"]["DivinationCard:test-card"]["stale"] is True
+    route = DivinationCardStrategyProvider(DivCardRegistry([recipe()], version="3.0", source="test")).evaluate({
+        **market_context(depth=False), "execution_prices": context["execution_prices"],
+    })[0]
+    assert route.market_capacity == 0
+    assert route.recommended_capacity == 0

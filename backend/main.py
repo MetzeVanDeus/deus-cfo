@@ -632,6 +632,8 @@ async def create_capital_plan(request: CapitalPlanRequest):
                 **market,
                 "chaos_per_divine": chaos_per_divine,
                 "active_poe_patch": active_poe_patch,
+                "budget_chaos": request.bankroll.total_net_worth * chaos_per_divine,
+                "capacity_horizon_hours": float(request.hours),
             }
             candidates.extend(provider.discover(provider_context))
             candidates.extend(strategies.default_deferred_strategy_provider().discover(provider_context))
@@ -942,6 +944,7 @@ def _latest_market_context(latest: dict) -> dict:
                     "buy_fee_rate": row.get("buy_fee_rate", row.get("fee_rate", 0)),
                     "sell_fee_rate": row.get("sell_fee_rate", row.get("fee_rate", 0)),
                     "observed_at": row.get("observed_at"),
+                    "stale": bool(row.get("stale", False)),
                     "confidence": row.get("confidence"),
                     "source": row.get("source"),
                 }
