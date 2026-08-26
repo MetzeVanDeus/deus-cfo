@@ -116,6 +116,22 @@ def test_unknown_depth_is_unscalable_and_not_discoverable():
     assert route.status == "theoretical"
 
 
+def test_theoretical_confidence_remains_when_execution_depth_is_missing():
+    route = DivinationCardStrategyProvider(DivCardRegistry([recipe()], version="3.0", source="test")).evaluate(
+        market_context(depth=False)
+    )[0]
+    assert route.pricing_confidence == pytest.approx(1.0)
+    assert route.confidence == pytest.approx(1.0)
+
+
+def test_explicit_zero_capacity_horizon_is_not_replaced_by_default():
+    context = market_context()
+    context["capacity_horizon_hours"] = 0
+    route = DivinationCardStrategyProvider(DivCardRegistry([recipe()], version="3.0", source="test")).evaluate(context)[0]
+    assert route.time_horizon_hours == 0
+    assert route.market_capacity == 1
+    assert route.recommended_capacity == 0
+
 def test_depth_pricing_exposes_theoretical_and_executable_roi_and_repeatability():
     provider = DivinationCardStrategyProvider(DivCardRegistry([recipe()], version="3.0", source="test"))
     route = provider.evaluate(market_context())[0]

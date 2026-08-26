@@ -832,7 +832,8 @@ class DivinationCardStrategyProvider:
         active_version = context.get("active_registry_version")
         active_poe_patch = context.get("active_poe_patch")
         league = context.get("league")
-        horizon = max(0.0, float(context.get("capacity_horizon_hours", 24) or 24))
+        horizon_value = context.get("capacity_horizon_hours")
+        horizon = max(0.0, float(horizon_value)) if horizon_value is not None else 24.0
         budget = context.get("budget_chaos")
         if budget is None and context.get("bankroll") is not None:
             budget = float(context.get("bankroll", 0) or 0) * float(context.get("chaos_per_divine", 1) or 1)
@@ -938,9 +939,10 @@ class DivinationCardStrategyProvider:
             quote_confidences = [buy_quote["confidence"]] + [quote["confidence"] for quote in sell_quotes if quote] if buy_quote else []
             quote_sources = [buy_quote["source"]] + [quote["source"] for quote in sell_quotes if quote] if buy_quote else []
             quote_times = [buy_quote["observed_at"]] + [quote["observed_at"] for quote in sell_quotes if quote] if buy_quote else []
-            pricing_confidence = min(quote_confidences) if quote_confidences else 0.0
+            confidence_inputs = quote_confidences if executable_output is not None else theoretical_confidences
+            pricing_confidence = min(confidence_inputs) if confidence_inputs else 0.0
             strategy_confidence = float(recipe["strategy_confidence"])
-            confidence = pricing_confidence * strategy_confidence if quote_confidences else 0.0
+            confidence = pricing_confidence * strategy_confidence if confidence_inputs else 0.0
             unique_sources = sorted(set(quote_sources))
             source = unique_sources[0] if len(unique_sources) == 1 else "mixed" if unique_sources else recipe["source"]
             input_cost = executable_cost if executable_cost is not None else theoretical_cost
