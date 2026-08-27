@@ -6,7 +6,7 @@
 
 ## Public-beta screenshots
 
-Captured from the packaged Windows service at a 1920×1080 browser viewport; screenshots show repository behavior with no fabricated market data.
+Captured from the packaged Windows service at a 1920×1080 browser viewport; these stills show repository behavior with no fabricated market data.
 
 ![First-run league selection](docs/screenshots/public-beta-first-run.webp)
 
@@ -15,6 +15,24 @@ Captured from the packaged Windows service at a 1920×1080 browser viewport; scr
 ![Configured Standard readiness](docs/screenshots/public-beta-readiness-wait.webp)
 
 *Configured Standard: zero stored rows and zero observed hours, so readiness truthfully remains a WAIT state while collection begins.*
+
+## Paper workflow showcase
+
+A first run often stays on `WAIT` until enough history exists. The clip below is a **labeled walkthrough using non-observed values** so the PAPER path is visible: set Divine bankroll → run a capital plan → create a paper portfolio → add a recommended position. It is not live market evidence and is not a performance claim.
+
+<video src="docs/screenshots/paper-workflow-showcase.mp4" controls muted loop playsinline width="800"></video>
+
+![Paper workflow showcase](docs/screenshots/paper-workflow-showcase.webp)
+
+*Recorded with `?showcase=1`. The amber banner (“SHOWCASE · non-observed values…”) is required. Default runs never insert these opportunities; validated DEPLOY remains behind the existing evidence gates.*
+
+![Showcase DEPLOY recommendation](docs/screenshots/paper-workflow-showcase-deploy.webp)
+
+*Non-observed DEPLOY: bankroll 25d net / 20d liquid, The Doctor on paper, low-confidence Currency Exchange watch.*
+
+![Showcase paper portfolio](docs/screenshots/paper-workflow-showcase-portfolio.webp)
+
+*Paper portfolio after ADD TO PAPER: one open position, liquid reduced in Chaos, no order placed.*
 
 ## Download and run
 

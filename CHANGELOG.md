@@ -1,4 +1,10 @@
 # Changelog
+## Unreleased
+
+### Documentation
+
+- Added a labeled PAPER workflow showcase clip (bankroll → plan → paper portfolio) that uses non-observed values behind `?showcase=1`. Default collection and planning still fail closed to WAIT.
+
 ## 0.3.1 — 2026-08-26
 
 ### Fixed
