@@ -7,7 +7,9 @@ import logging
 import math
 import os
 from datetime import datetime, timezone
+from statistics import median
 from pathlib import Path
+from urllib.parse import quote
 import httpx
 
 import cx_collector
@@ -27,6 +29,9 @@ TRADE_DEPTH_LIMIT_ENV = "DEUSCFO_TRADE_DEPTH_LIMIT"
 TRADE_REQUEST_DELAY_ENV = "DEUSCFO_TRADE_REQUEST_DELAY"
 TRADE_USER_AGENT_ENV = "DEUSCFO_TRADE_USER_AGENT"
 TRADE_FEE_ENV = "DEUSCFO_TRADE_FEE_RATE"
+SELL_LISTING_MIN_COUNT_ENV = "DEUSCFO_SELL_LISTING_MIN_COUNT"
+SELL_LISTING_CLUSTER_SPREAD_ENV = "DEUSCFO_SELL_LISTING_CLUSTER_SPREAD"
+SELL_LISTING_HAIRCUT_ENV = "DEUSCFO_SELL_LISTING_HAIRCUT"
 CONFIG_PATH = Path(os.environ["DEUSCFO_CONFIG_PATH"]) if os.environ.get("DEUSCFO_CONFIG_PATH") else Path(__file__).resolve().parent.parent / "deuscfo.config.json"
 
 # Shared category ids and poe.ninja API type values.
@@ -75,6 +80,26 @@ def _trade_fee() -> float:
     except ValueError:
         return 0.0
     return value if math.isfinite(value) and 0 <= value < 1 else 0.0
+
+
+def _sell_listing_settings() -> tuple[int, float, float]:
+    try:
+        minimum_count = int(os.environ.get(SELL_LISTING_MIN_COUNT_ENV, "3"))
+    except ValueError:
+        minimum_count = 3
+    try:
+        cluster_spread = float(os.environ.get(SELL_LISTING_CLUSTER_SPREAD_ENV, "0.15"))
+    except ValueError:
+        cluster_spread = 0.15
+    try:
+        haircut = float(os.environ.get(SELL_LISTING_HAIRCUT_ENV, "0.10"))
+    except ValueError:
+        haircut = 0.10
+    return (
+        minimum_count if 3 <= minimum_count <= 50 else 3,
+        cluster_spread if math.isfinite(cluster_spread) and 0.01 <= cluster_spread <= 0.50 else 0.15,
+        haircut if math.isfinite(haircut) and 0.01 <= haircut <= 0.50 else 0.10,
+    )
 
 
 def _trade_headers() -> dict[str, str]:
@@ -189,7 +214,13 @@ def _trade_price(entry: dict, chaos_per_divine: float) -> tuple[float, float] | 
     return float(amount) * multiplier, float(quantity)
 
 
-def _trade_quote(entries: list[dict], *, side: str, chaos_per_divine: float) -> dict | None:
+def _trade_quote(
+    entries: list[dict],
+    *,
+    side: str,
+    chaos_per_divine: float,
+    trade_url: str | None = None,
+) -> dict | None:
     levels: dict[float, float] = {}
     observed = []
     for entry in entries:
@@ -203,7 +234,7 @@ def _trade_quote(entries: list[dict], *, side: str, chaos_per_divine: float) -> 
             observed.append(indexed)
     if not levels:
         return None
-    return {
+    result = {
         f"{side}_levels": [
             {"price": price, "quantity": quantity}
             for price, quantity in sorted(levels.items())
@@ -212,6 +243,82 @@ def _trade_quote(entries: list[dict], *, side: str, chaos_per_divine: float) -> 
         "observed_at": max(observed) if observed else datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "confidence": 0.6,
         "source": "pathofexile_trade_api",
+    }
+    if trade_url is not None:
+        result["trade_url"] = trade_url
+    return result
+
+
+def _exact_trade_entries(entries: list[dict], item_name: str) -> list[dict]:
+    exact = []
+    for entry in entries:
+        item = entry.get("item") if isinstance(entry, dict) else None
+        if not isinstance(item, dict):
+            continue
+        names = {item.get("name"), item.get("typeLine")}
+        if item_name not in names or item.get("identified") is False or any(
+            item.get(field) for field in (
+                "corrupted", "mirrored", "foilVariation", "synthesised",
+                "fractured", "split", "duplicated", "influences",
+            )
+        ):
+            continue
+        exact.append(entry)
+    return exact
+
+
+def _sell_listing_floor_quote(
+    entries: list[dict],
+    *,
+    chaos_per_divine: float,
+    trade_url: str,
+) -> dict | None:
+    minimum_count, cluster_spread, haircut = _sell_listing_settings()
+    listings = []
+    for entry in entries:
+        value = _trade_price(entry, chaos_per_divine)
+        if value is None:
+            continue
+        price, quantity = value
+        indexed = (entry.get("listing") or {}).get("indexed")
+        if not isinstance(indexed, str):
+            continue
+        try:
+            parsed_indexed = datetime.fromisoformat(indexed.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if parsed_indexed.tzinfo is None:
+            continue
+        listings.append((price, quantity, parsed_indexed))
+    if len(listings) < minimum_count:
+        return None
+    center = median(price for price, _quantity, _indexed in listings)
+    clustered = [
+        listing for listing in listings
+        if abs(listing[0] - center) / center <= cluster_spread
+    ]
+    if len(clustered) < minimum_count:
+        return None
+    if any(indexed > datetime.now(timezone.utc) for _price, _quantity, indexed in clustered):
+        return None
+    listing_floor = min(price for price, _quantity, _indexed in clustered)
+    adjusted_floor = listing_floor * (1 - haircut)
+    depth = sum(quantity for _price, quantity, _indexed in clustered)
+    observed_at = min(indexed for _price, _quantity, indexed in clustered)
+    return {
+        "sell_listing_floor_levels": [{"price": adjusted_floor, "quantity": depth}],
+        "quote_kind": "sell_listing_floor",
+        "listing_floor": listing_floor,
+        "sell_listing_floor": adjusted_floor,
+        "liquidation_haircut": haircut,
+        "listing_sample_count": len(listings),
+        "listing_cluster_count": len(clustered),
+        "listing_cluster_depth": depth,
+        "listing_cluster_spread": cluster_spread,
+        "observed_at": observed_at.isoformat(timespec="seconds"),
+        "confidence": 0.6,
+        "source": "pathofexile_trade_listing_floor",
+        "trade_url": trade_url,
     }
 
 
@@ -228,14 +335,15 @@ class TradeDepthAdapter:
         *,
         side: str,
         chaos_per_divine: float,
+        search_field: str = "name",
     ) -> dict | None:
-        if side != "buy":
+        if side not in {"buy", "sell_listing_floor"} or search_field not in {"name", "type"}:
             return None
         try:
             response = await client.post(
                 f"{TRADE_API_BASE}/search/{league}",
                 json={
-                    "query": {"status": {"option": "online"}, "name": item_name},
+                    "query": {"status": {"option": "online"}, search_field: item_name},
                     "sort": {"price": "asc"},
                 },
             )
@@ -249,17 +357,38 @@ class TradeDepthAdapter:
             listing_ids = [item for item in listing_ids[:self.limit] if isinstance(item, str) and item]
             if not listing_ids:
                 return None
-            response = await client.get(
-                f"{TRADE_API_BASE}/fetch/{','.join(listing_ids)}",
-                params={"query": search_id},
+            entries = []
+            for offset in range(0, len(listing_ids), 10):
+                if offset:
+                    await asyncio.sleep(_trade_delay())
+                response = await client.get(
+                    f"{TRADE_API_BASE}/fetch/{','.join(listing_ids[offset:offset + 10])}",
+                    params={"query": search_id},
+                )
+                if response.status_code != 200:
+                    return None
+                payload = response.json()
+                chunk = payload.get("result", []) if isinstance(payload, dict) else []
+                if not isinstance(chunk, list):
+                    return None
+                entries.extend(chunk)
+            trade_url = (
+                f"https://www.pathofexile.com/trade/search/"
+                f"{quote(league, safe='')}/{quote(search_id, safe='')}"
             )
-            if response.status_code != 200:
-                return None
-            payload = response.json()
-            entries = payload.get("result", []) if isinstance(payload, dict) else []
-            if not isinstance(entries, list):
-                return None
-            return _trade_quote(entries, side="buy", chaos_per_divine=chaos_per_divine)
+            exact_entries = _exact_trade_entries(entries, item_name)
+            if side == "sell_listing_floor":
+                return _sell_listing_floor_quote(
+                    exact_entries,
+                    chaos_per_divine=chaos_per_divine,
+                    trade_url=trade_url,
+                )
+            return _trade_quote(
+                exact_entries,
+                side="buy",
+                chaos_per_divine=chaos_per_divine,
+                trade_url=trade_url,
+            )
         except Exception:
             # Trade-site outages and malformed payloads must never become evidence.
             log.warning("trade depth request failed for %s", item_name, exc_info=True)
@@ -272,17 +401,24 @@ class TradeDepthAdapter:
         *,
         chaos_per_divine: float = 0.0,
     ) -> dict[str, dict]:
-        items = {recipe["card_market_key"]: recipe["card"] for recipe in recipes}
+        requests = {
+            (recipe["card_market_key"], "buy"): recipe["card"]
+            for recipe in recipes
+        }
+        for recipe in recipes:
+            if recipe.get("deterministic") and recipe.get("reward_type") == "exact_unique":
+                requests[(recipe["reward_market_key"], "sell_listing_floor")] = recipe["reward_item"]
         quotes = {}
         async with httpx.AsyncClient(timeout=20, headers=_trade_headers()) as client:
-            for index, (key, name) in enumerate(items.items()):
+            for index, ((key, side), name) in enumerate(requests.items()):
                 if index:
                     await asyncio.sleep(_trade_delay())
-                quote = await self.quote(
-                    client, league, name, side="buy", chaos_per_divine=chaos_per_divine
+                quote_value = await self.quote(
+                    client, league, name, side=side, chaos_per_divine=chaos_per_divine,
+                    search_field="type" if key.startswith("DivinationCard:") else "name",
                 )
-                if quote is not None:
-                    quotes[key] = quote
+                if quote_value is not None:
+                    quotes.setdefault(key, {}).update(quote_value)
         return quotes
 
 
@@ -291,7 +427,7 @@ def _quote_snapshot(key: str, name: str, quote: dict, *, league: str) -> dict | 
     category, separator, item_id = key.partition(":")
     if not separator:
         return None
-    levels = quote.get("buy_levels") or quote.get("sell_levels")
+    levels = quote.get("buy_levels") or quote.get("sell_levels") or quote.get("sell_listing_floor_levels")
     if not levels:
         return None
     return {
@@ -302,7 +438,7 @@ def _quote_snapshot(key: str, name: str, quote: dict, *, league: str) -> dict | 
         "variant": "",
         "price_chaos": levels[0]["price"],
         "volume": sum(level["quantity"] for level in levels),
-        "listing_count": len(levels),
+        "listing_count": quote.get("listing_cluster_count", len(levels)),
         "source": quote["source"],
         "observation_type": "DIRECT_OBSERVATION",
         "observed_at": quote["observed_at"],

@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import StrEnum
 from pathlib import Path
+from urllib.parse import urlsplit
 from typing import Any, Mapping, Protocol, Sequence
 
 import validation
@@ -16,6 +17,47 @@ from pydantic import BaseModel, Field
 from opportunity import InvestableOpportunity
 
 _EXECUTION_QUOTE_MAX_AGE = timedelta(hours=24)
+
+
+class AdvisoryTradeLink(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    side: str
+    item: str
+    market_key: str
+    url: str
+
+
+class BatchExpectedOutcome(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    item: str
+    market_key: str
+    probability: float
+    expected_quantity: float
+    executable_revenue_chaos: float
+    liquidation_quote_kind: str
+
+
+class BatchPlan(BaseModel):
+    """Budget-bounded manual execution plan; all money values are Chaos."""
+
+    model_config = {"extra": "forbid"}
+
+    budget_chaos: float
+    set_count: int
+    exact_cards_to_buy: int
+    expected_outcomes: list[BatchExpectedOutcome]
+    executable_cost_chaos: float
+    executable_revenue_chaos: float
+    executable_net_chaos: float
+    minimum_target_sale_chaos: float = Field(description="Minimum net sale proceeds needed to break even")
+    active_effort_hours: float
+    lock_time_min_hours: float
+    lock_time_max_hours: float
+    maximum_recommended_batch: int
+    binding_constraint: str
+    trade_links: list[AdvisoryTradeLink] = Field(default_factory=list)
 
 
 class ProfitRoute(BaseModel):
@@ -38,11 +80,11 @@ class ProfitRoute(BaseModel):
     gross_profit: float = Field(description="Chaos per base batch before explicit execution friction")
     expected_net_profit: float = Field(description="Safe expected net Chaos per base batch")
     theoretical_net_profit: float | None = Field(default=None, description="Theoretical expected net Chaos per base batch")
-    executable_net_profit: float | None = Field(default=None, description="Exact-depth executable net Chaos per base batch")
+    executable_net_profit: float | None = Field(default=None, description="Net Chaos from validated executable liquidity evidence")
     actual_net_profit: float | None = Field(default=None, description="Observed journal net Chaos per completed batch")
     roi: float = Field(description="Dimensionless net return / input capital")
     theoretical_roi: float | None = Field(default=None, description="Dimensionless theoretical ROI from reference prices")
-    executable_roi: float | None = Field(default=None, description="Dimensionless ROI from exact executable depth")
+    executable_roi: float | None = Field(default=None, description="Dimensionless ROI from validated executable liquidity evidence")
     capital_required: float = Field(description="Chaos required for one base batch")
     capacity: float = Field(description="Recommended complete batches in capacity_units")
     capacity_units: str = "capital"
@@ -55,7 +97,7 @@ class ProfitRoute(BaseModel):
     budget_capacity: int = Field(default=0, description="Largest positive-safe batch fitting the stated Chaos budget")
     recommended_capacity: int = Field(default=0, description="Largest positive-safe batch recommended after all constraints")
     estimated_sets_per_lock_hour: float = Field(default=0.0, description="Complete sets per capital-lock hour")
-    market_capacity: int = Field(default=0, description="Largest positive-safe batch supported by exact market depth")
+    market_capacity: int = Field(default=0, description="Largest positive-safe batch supported by validated liquidity evidence")
     time_horizon_hours: float = Field(default=0.0, description="Evaluation horizon in elapsed hours")
     capacity_assumptions: list[str] = Field(default_factory=list)
     reasons: list[str] = Field(default_factory=list)
@@ -72,6 +114,7 @@ class ProfitRoute(BaseModel):
     costs: list[dict[str, Any]] = Field(default_factory=list)
     outputs: list[dict[str, Any]] = Field(default_factory=list)
     execution_steps: list[str] = Field(default_factory=list)
+    batch_plan: BatchPlan | None = None
 
     def to_investable(
         self,
@@ -493,6 +536,7 @@ class DivCardRecipe(BaseModel):
     corrupted: bool
     item_level: int | None
     special_conditions: list[str]
+    manual_verification: bool
     deterministic: bool
     trusted_distribution: bool = False
     verified_version: str
@@ -509,8 +553,9 @@ _DIV_CARD_ALLOWED_KEYS = {
     "id", "card", "set_size", "card_market_key", "reward_type", "reward_item",
     "reward_quantity", "reward_market_key", "variant", "corrupted", "item_level",
     "special_conditions", "deterministic", "trusted_distribution", "outcomes",
-    "verified_version", "poe_patch", "source", "manual_actions", "expected_execution_time_hours",
-    "expected_sale_time_hours", "execution_risk", "strategy_confidence", "max_batch",
+    "verified_version", "poe_patch", "source", "manual_verification", "manual_actions",
+    "expected_execution_time_hours", "expected_sale_time_hours", "execution_risk",
+    "strategy_confidence", "max_batch",
 }
 
 
@@ -524,7 +569,8 @@ def validate_div_card_recipe(record: Mapping[str, Any]) -> dict[str, Any]:
     required = {
         "id", "card", "set_size", "card_market_key", "reward_type", "reward_item",
         "reward_quantity", "reward_market_key", "variant", "corrupted", "item_level",
-        "special_conditions", "deterministic", "verified_version", "poe_patch", "source", "manual_actions",
+        "special_conditions", "deterministic", "verified_version", "poe_patch", "source",
+        "manual_verification", "manual_actions",
     }
     missing = required - set(record)
     if missing:
@@ -552,6 +598,10 @@ def validate_div_card_recipe(record: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError("special_conditions must be a list of non-empty strings")
     if not isinstance(record["deterministic"], bool):
         raise ValueError("deterministic must be boolean")
+    if record["manual_verification"] is not True:
+        raise ValueError("manual_verification must be true")
+    if record["deterministic"] and not record["reward_type"].casefold().startswith("exact_"):
+        raise ValueError("deterministic reward_type must describe an exact reward")
     if record["deterministic"] and (
         record["corrupted"]
         or any(token in record["reward_type"].casefold() for token in ("random", "influenced", "corrupted"))
@@ -559,6 +609,14 @@ def validate_div_card_recipe(record: Mapping[str, Any]) -> dict[str, Any]:
                for token in ("random", "influenced", "corrupted"))
     ):
         raise ValueError("random, corrupted, and influenced rewards are not deterministic")
+    if record["deterministic"] and (
+        record["variant"]
+        or record["item_level"] is not None
+        or record["special_conditions"]
+    ):
+        raise ValueError(
+            "variant, item-level, and special-condition rewards are unsupported by collected identity"
+        )
     if not isinstance(record["manual_actions"], list) or not all(
         isinstance(item, str) and item.strip() for item in record["manual_actions"]
     ):
@@ -608,7 +666,7 @@ STALE_RECIPE_POLICY = "reject"
 
 
 class DivCardRegistry:
-    """Versioned registry with a separate Path of Exile verification patch."""
+    """Versioned registry with fail-closed curation diagnostics."""
 
     def __init__(
         self,
@@ -636,6 +694,7 @@ class DivCardRegistry:
         self.poe_patch = poe_patch
         self.verified_leagues = frozenset(verified_leagues)
         self._records: dict[str, dict[str, Any]] = {}
+        self._rejected: tuple[dict[str, Any], ...] = ()
         for record in records:
             normalized = validate_div_card_recipe(record)
             if normalized["verified_version"] != self.version:
@@ -667,16 +726,92 @@ class DivCardRegistry:
             )
         if not isinstance(payload["recipes"], list) or not isinstance(payload["verified_leagues"], list):
             raise ValueError("divination-card recipes and verified_leagues must be lists")
-        return cls(
-            payload["recipes"],
+        accepted: list[dict[str, Any]] = []
+        rejected: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for record in payload["recipes"]:
+            recipe_id = str(record.get("id", "<unknown>")) if isinstance(record, Mapping) else "<unknown>"
+            try:
+                normalized = validate_div_card_recipe(record)
+                if normalized["verified_version"] != payload["version"]:
+                    raise ValueError(
+                        f"stale divination-card recipe {recipe_id}: verified_version "
+                        f"{normalized['verified_version']} != registry version {payload['version']}"
+                    )
+                if normalized["poe_patch"] != payload["poe_patch"]:
+                    raise ValueError(
+                        f"stale divination-card recipe {recipe_id}: poe_patch "
+                        f"{normalized['poe_patch']} != registry patch {payload['poe_patch']}"
+                    )
+                if recipe_id in seen:
+                    raise ValueError(f"duplicate divination-card recipe: {recipe_id}")
+            except ValueError as exc:
+                reward_type = record.get("reward_type") if isinstance(record, Mapping) else None
+                rejected.append({
+                    "id": recipe_id,
+                    "reason": str(exc),
+                    "poe_patch": record.get("poe_patch") if isinstance(record, Mapping) else None,
+                    "reward_type": reward_type,
+                    "unsupported_reward_category": bool(
+                        isinstance(record, Mapping)
+                        and record.get("deterministic") is True
+                        and (not isinstance(reward_type, str) or not reward_type.casefold().startswith("exact_"))
+                    ),
+                })
+                continue
+            accepted.append(normalized)
+            seen.add(recipe_id)
+        registry = cls(
+            accepted,
             version=payload["version"],
             source=payload["source"],
             poe_patch=payload["poe_patch"],
             verified_leagues=payload["verified_leagues"],
         )
+        registry._rejected = tuple(rejected)
+        return registry
 
     def records(self) -> tuple[dict[str, Any], ...]:
         return tuple(dict(record) for record in self._records.values())
+
+    def health_report(
+        self,
+        *,
+        active_poe_patch: str | None = None,
+        price_keys: Sequence[str] | None = None,
+    ) -> dict[str, Any]:
+        records = self.records()
+        available = set(price_keys or ())
+        required_keys = {
+            key
+            for record in records
+            for key in (record["card_market_key"], record["reward_market_key"])
+        }
+        stale = {
+            record["id"]
+            for record in records
+            if active_poe_patch is not None and record["poe_patch"] != active_poe_patch
+        }
+        stale.update(
+            item["id"]
+            for item in self._rejected
+            if active_poe_patch is not None
+            and item.get("poe_patch")
+            and item["poe_patch"] != active_poe_patch
+        )
+        return {
+            "accepted_count": len(records),
+            "rejected_count": len(self._rejected),
+            "rejected": [dict(item) for item in self._rejected],
+            "missing_price_identities": sorted(required_keys - available) if price_keys is not None else [],
+            "market_evidence_evaluated": price_keys is not None,
+            "stale_patch_records": sorted(stale),
+            "unsupported_reward_categories": sorted({
+                str(item["reward_type"])
+                for item in self._rejected
+                if item.get("unsupported_reward_category") and item.get("reward_type")
+            }),
+        }
 
 
 def default_div_card_registry() -> DivCardRegistry:
@@ -735,11 +870,38 @@ def _consume_depth(levels: Any, quantity: float, *, buy: bool) -> tuple[float, f
     return (total, filled) if remaining <= 1e-9 else None
 
 
+def _safe_trade_url(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    parsed = urlsplit(value)
+    parts = [part for part in parsed.path.split("/") if part]
+    if (
+        parsed.scheme != "https"
+        or parsed.netloc != "www.pathofexile.com"
+        or len(parts) != 4
+        or parts[:2] != ["trade", "search"]
+        or parsed.query
+        or parsed.fragment
+    ):
+        return None
+    return value
+
+
 def _quote_info(execution_prices: Mapping[str, Any], key: str, *, side: str) -> dict[str, Any] | None:
     quote = execution_prices.get(key)
     if not isinstance(quote, Mapping) or not isinstance(quote.get("stale", False), bool) or quote.get("stale", False):
         return None
-    levels = quote.get("buy_levels" if side == "buy" else "sell_levels")
+    if side == "buy":
+        levels = quote.get("buy_levels")
+        quote_kind = "seller_ask_depth"
+    elif quote.get("sell_levels"):
+        levels = quote.get("sell_levels")
+        quote_kind = "buyer_bid_depth"
+    else:
+        levels = quote.get("sell_listing_floor_levels")
+        quote_kind = quote.get("quote_kind")
+        if quote_kind != "sell_listing_floor":
+            return None
     fee = quote.get("buy_fee_rate" if side == "buy" else "sell_fee_rate", quote.get("fee_rate", 0))
     if not isinstance(fee, (int, float)) or isinstance(fee, bool) or not 0 <= fee < 1:
         return None
@@ -763,8 +925,12 @@ def _quote_info(execution_prices: Mapping[str, Any], key: str, *, side: str) -> 
     source = quote.get("source")
     if not isinstance(source, str) or not source:
         return None
-    return {"levels": levels, "fee": float(fee), "observed_at": observed_at,
-            "confidence": float(confidence), "source": source, "stale": quote.get("stale", False)}
+    result = {"levels": levels, "fee": float(fee), "observed_at": observed_at,
+              "confidence": float(confidence), "source": source, "stale": quote.get("stale", False),
+              "quote_kind": quote_kind}
+    if trade_url := _safe_trade_url(quote.get("trade_url")):
+        result["trade_url"] = trade_url
+    return result
 
 def evaluate_batch_ladder(
     *,
@@ -789,11 +955,17 @@ def evaluate_batch_ladder(
     for batch_size in range(1, max(0, int(max_batch)) + 1):
         buy_fill = _consume_depth(buy_quote["levels"], batch_size * set_size, buy=True)
         if buy_fill is None:
+            if ladder:
+                ladder[-1]["binding_constraint"] = "buy_depth"
             break
         input_cost = buy_fill[0] * (1 + float(buy_quote["fee"]))
         if budget_chaos > 0 and input_cost > budget_chaos + 1e-9:
+            if ladder:
+                ladder[-1]["binding_constraint"] = "budget"
             break
         if batch_size * capital_lock_time > time_horizon_hours + 1e-9:
+            if ladder:
+                ladder[-1]["binding_constraint"] = "time_horizon"
             break
         output_value = 0.0
         liquidation_values: list[float] = []
@@ -802,6 +974,8 @@ def evaluate_batch_ladder(
         for outcome, quote in zip(outcomes, sell_quotes, strict=True):
             sell_fill = _consume_depth(quote["levels"], batch_size * float(outcome["reward_quantity"]), buy=False)
             if sell_fill is None:
+                if ladder:
+                    ladder[-1]["binding_constraint"] = "sell_depth"
                 return ladder
             liquidation = sell_fill[0] * (1 - float(quote["fee"]))
             liquidation_values.append(liquidation)
@@ -811,6 +985,8 @@ def evaluate_batch_ladder(
         net = output_value - input_cost
         previous_net = ladder[-1]["safe_net_chaos"] if ladder else 0.0
         if net <= 0 or net - previous_net <= 0:
+            if ladder:
+                ladder[-1]["binding_constraint"] = "non_positive_marginal_net"
             break
         ladder.append({
             "batch_size": batch_size,
@@ -821,6 +997,7 @@ def evaluate_batch_ladder(
             "liquidation_values_chaos": liquidation_values,
             "outcome_capacities": outcome_capacities,
             "expected_quantities": expected_quantities,
+            "binding_constraint": "recipe_max_batch",
         })
     return ladder
 class DivinationCardStrategyProvider:
@@ -836,11 +1013,14 @@ class DivinationCardStrategyProvider:
         active_version = context.get("active_registry_version")
         active_poe_patch = context.get("active_poe_patch")
         league = context.get("league")
+        ambiguous_market_keys = set(context.get("ambiguous_market_keys", ()))
         horizon_value = context.get("capacity_horizon_hours")
         horizon = max(0.0, float(horizon_value)) if horizon_value is not None else 24.0
         budget = context.get("budget_chaos")
+        budget_requested = budget is not None
         if budget is None and context.get("bankroll") is not None:
             budget = float(context.get("bankroll", 0) or 0) * float(context.get("chaos_per_divine", 1) or 1)
+            budget_requested = True
         budget = max(0.0, float(budget or 0))
         routes: list[ProfitRoute] = []
         for recipe in self.registry.records():
@@ -860,7 +1040,11 @@ class DivinationCardStrategyProvider:
                 outcomes = recipe["outcomes"]
                 reasons.append("trusted finite-outcome reward distribution verified")
             reasons.append(f"verified against PoE patch {recipe['poe_patch']}")
-            card_price = _exact_price_info(prices, records, recipe["card_market_key"])
+            if recipe["card_market_key"] in ambiguous_market_keys:
+                card_price = None
+                reasons.append(f"ambiguous market identity: {recipe['card_market_key']}")
+            else:
+                card_price = _exact_price_info(prices, records, recipe["card_market_key"])
             theoretical_confidences = [card_price["confidence"]] if card_price else []
             theoretical_sources = [card_price["source"]] if card_price and card_price["source"] else []
             if card_price is None:
@@ -868,9 +1052,14 @@ class DivinationCardStrategyProvider:
             theoretical_cost = card_price["price"] * recipe["set_size"] if card_price else None
             theoretical_output = 0.0
             for outcome in outcomes:
-                reward_price = _exact_price_info(prices, records, outcome["reward_market_key"])
+                reward_key = outcome["reward_market_key"]
+                if reward_key in ambiguous_market_keys:
+                    reasons.append(f"ambiguous market identity: {reward_key}")
+                    theoretical_output = None
+                    break
+                reward_price = _exact_price_info(prices, records, reward_key)
                 if reward_price is None:
-                    reasons.append(f"missing market price: {outcome['reward_market_key']}")
+                    reasons.append(f"missing market price: {reward_key}")
                     theoretical_output = None
                     break
                 theoretical_output += float(outcome["probability"]) * float(outcome["reward_quantity"]) * reward_price["price"]
@@ -884,31 +1073,55 @@ class DivinationCardStrategyProvider:
             theoretical_net = (theoretical_output * (1 - float(recipe.get("sale_fee_rate", 0))) - theoretical_cost) if theoretical_output is not None and theoretical_cost else None
             active_time = float(recipe["expected_execution_time_hours"])
             capital_lock_time = max(0.25, active_time + float(recipe["expected_sale_time_hours"]))
-            buy_quote = _quote_info(execution_prices, recipe["card_market_key"], side="buy")
-            sell_quotes = [_quote_info(execution_prices, outcome["reward_market_key"], side="sell") for outcome in outcomes]
+            buy_quote = (
+                None if recipe["card_market_key"] in ambiguous_market_keys
+                else _quote_info(execution_prices, recipe["card_market_key"], side="buy")
+            )
+            sell_quotes = []
+            for outcome in outcomes:
+                quote_info = (
+                    None if outcome["reward_market_key"] in ambiguous_market_keys
+                    else _quote_info(execution_prices, outcome["reward_market_key"], side="sell")
+                )
+                if quote_info and quote_info["quote_kind"] == "sell_listing_floor" and (
+                    not recipe["deterministic"] or recipe["reward_type"] != "exact_unique"
+                ):
+                    quote_info = None
+                sell_quotes.append(quote_info)
             if not buy_quote:
                 reasons.append(f"missing buy depth: {recipe['card_market_key']}")
             for outcome, quote in zip(outcomes, sell_quotes, strict=True):
                 if not quote:
-                    reasons.append(f"missing sell bid depth: {outcome['reward_market_key']}")
+                    reasons.append(f"missing output liquidity evidence: {outcome['reward_market_key']}")
+            floor_quote_keys = [
+                outcome["reward_market_key"]
+                for outcome, quote in zip(outcomes, sell_quotes, strict=True)
+                if quote and quote["quote_kind"] == "sell_listing_floor"
+            ]
+            if floor_quote_keys:
+                reasons.append(
+                    "output value uses a haircut clustered sell-listing floor, not buyer-side executable depth: "
+                    + ", ".join(floor_quote_keys)
+                )
             first_buy = _consume_depth(buy_quote["levels"], recipe["set_size"], buy=True) if buy_quote else None
             executable_cost = first_buy[0] * (1 + buy_quote["fee"]) if first_buy and buy_quote else None
             executable_output = None
-            first_liquidations: list[float] = []
             if first_buy and buy_quote and all(sell_quotes):
                 executable_output = 0.0
                 for outcome, quote in zip(outcomes, sell_quotes, strict=True):
+                    if not quote:
+                        executable_output = None
+                        break
                     fill = _consume_depth(quote["levels"], float(outcome["reward_quantity"]), buy=False)
                     if fill is None:
                         executable_output = None
                         break
                     liquidation = fill[0] * (1 - quote["fee"])
-                    first_liquidations.append(liquidation)
                     executable_output += float(outcome["probability"]) * liquidation
             complete_execution = executable_cost is not None and executable_output is not None
             executable_roi = (
                 (executable_output - executable_cost) / executable_cost
-                if complete_execution else None
+                if executable_cost is not None and executable_output is not None else None
             )
             market_ladder = evaluate_batch_ladder(
                 set_size=recipe["set_size"], outcomes=outcomes, buy_quote=buy_quote,
@@ -928,11 +1141,11 @@ class DivinationCardStrategyProvider:
             market_capacity = len(market_ladder) if complete_execution else 0
             budget_capacity = len(budget_ladder) if budget > 0 and complete_execution else 0
             recommended_capacity = len(recommended_ladder) if complete_execution else 0
-            net = float(executable_output - executable_cost) if complete_execution else 0.0
+            net = float(executable_output - executable_cost) if executable_cost is not None and executable_output is not None else 0.0
             if complete_execution:
-                reasons.append("depth-aware executable buy and probability-weighted liquidation quotes")
+                reasons.append("validated input depth and probability-weighted output liquidity evidence")
             else:
-                reasons.append("executable depth unavailable; scalable capacity is zero")
+                reasons.append("executable liquidity evidence unavailable; scalable capacity is zero")
             if theoretical_roi is not None and not complete_execution:
                 reasons.append("theoretical pricing is available; execution remains unverified")
             reasons.append("positive executable set profit" if net > 0 else "no positive executable profit")
@@ -945,8 +1158,13 @@ class DivinationCardStrategyProvider:
                 else "insufficient_evidence"
             )
             quote_confidences = [buy_quote["confidence"]] + [quote["confidence"] for quote in sell_quotes if quote] if buy_quote else []
-            quote_sources = [buy_quote["source"]] + [quote["source"] for quote in sell_quotes] if complete_execution else []
-            quote_times = [buy_quote["observed_at"]] + [quote["observed_at"] for quote in sell_quotes] if complete_execution else []
+            validated_sell_quotes = [quote for quote in sell_quotes if quote]
+            if complete_execution and buy_quote:
+                quote_sources = [buy_quote["source"]] + [quote["source"] for quote in validated_sell_quotes]
+                quote_kinds = [buy_quote["quote_kind"]] + [quote["quote_kind"] for quote in validated_sell_quotes]
+                quote_times = [buy_quote["observed_at"]] + [quote["observed_at"] for quote in validated_sell_quotes]
+            else:
+                quote_sources = quote_kinds = quote_times = []
             confidence_inputs = quote_confidences if complete_execution else theoretical_confidences
             pricing_confidence = min(confidence_inputs) if confidence_inputs else 0.0
             strategy_confidence = float(recipe["strategy_confidence"])
@@ -959,9 +1177,58 @@ class DivinationCardStrategyProvider:
             outcome_liquidation = []
             for index, outcome in enumerate(outcomes):
                 quote = sell_quotes[index]
-                capacity = int(sum(float(level["quantity"]) for level in quote["levels"]) // float(outcome["reward_quantity"])) if complete_execution else 0
-                outcome_outputs.append({**outcome, "liquidation_capacity_sets": capacity})
+                capacity = int(sum(float(level["quantity"]) for level in quote["levels"]) // float(outcome["reward_quantity"])) if complete_execution and quote else 0
+                outcome_outputs.append({**outcome, "liquidation_capacity_sets": capacity, "liquidation_quote_kind": quote["quote_kind"] if quote else None})
                 outcome_liquidation.append({"probability": float(outcome["probability"]), "capacity_sets": capacity})
+            batch_plan = None
+            if budget_requested and recommended_ladder:
+                selected = recommended_ladder[-1]
+                set_count = int(selected["batch_size"])
+                expected_outcomes = [
+                    BatchExpectedOutcome(
+                        item=outcome["reward_item"],
+                        market_key=outcome["reward_market_key"],
+                        probability=float(outcome["probability"]),
+                        expected_quantity=float(selected["expected_quantities"][index]),
+                        executable_revenue_chaos=float(
+                            selected["liquidation_values_chaos"][index] * float(outcome["probability"])
+                        ),
+                        liquidation_quote_kind=validated_sell_quotes[index]["quote_kind"],
+                    )
+                    for index, outcome in enumerate(outcomes)
+                ]
+                trade_links = []
+                if buy_quote and buy_quote.get("trade_url"):
+                    trade_links.append(AdvisoryTradeLink(
+                        side="buy",
+                        item=recipe["card"],
+                        market_key=recipe["card_market_key"],
+                        url=buy_quote["trade_url"],
+                    ))
+                for outcome, quote in zip(outcomes, sell_quotes, strict=True):
+                    if quote and quote.get("trade_url"):
+                        trade_links.append(AdvisoryTradeLink(
+                            side="sell",
+                            item=outcome["reward_item"],
+                            market_key=outcome["reward_market_key"],
+                            url=quote["trade_url"],
+                        ))
+                batch_plan = BatchPlan(
+                    budget_chaos=budget,
+                    set_count=set_count,
+                    exact_cards_to_buy=set_count * int(recipe["set_size"]),
+                    expected_outcomes=expected_outcomes,
+                    executable_cost_chaos=float(selected["input_cost_chaos"]),
+                    executable_revenue_chaos=float(selected["executable_output_chaos"]),
+                    executable_net_chaos=float(selected["safe_net_chaos"]),
+                    minimum_target_sale_chaos=float(selected["input_cost_chaos"]),
+                    active_effort_hours=set_count * active_time,
+                    lock_time_min_hours=set_count * active_time + float(recipe["expected_sale_time_hours"]),
+                    lock_time_max_hours=set_count * capital_lock_time,
+                    maximum_recommended_batch=set_count,
+                    binding_constraint=str(selected["binding_constraint"]),
+                    trade_links=trade_links,
+                )
             route = ProfitRoute(
                 transformation_id=recipe["id"], name=f"{recipe['card']} set arbitrage",
                 strategy_family="divination_card", status=status, league=league, category="DivinationCard",
@@ -978,7 +1245,7 @@ class DivinationCardStrategyProvider:
                 profit_per_set=float(net), budget_capacity=budget_capacity,
                 recommended_capacity=recommended_capacity, estimated_sets_per_lock_hour=float(1 / capital_lock_time) if market_capacity else 0.0,
                 market_capacity=market_capacity, time_horizon_hours=horizon,
-                capacity_assumptions=["capacity is measured in complete sets", "buy and sell depth are consumed cumulatively", "unknown or stale depth produces zero scalable sets"],
+                capacity_assumptions=["capacity is measured in complete sets", "buy depth and validated output liquidity are consumed cumulatively", "clustered sell-listing floors include a conservative liquidation haircut", "unknown or stale liquidity evidence produces zero scalable sets"],
                 reasons=list(reasons), confidence=confidence, pricing_confidence=pricing_confidence,
                 strategy_confidence=strategy_confidence, execution_risk=float(recipe["execution_risk"] if complete_execution else 1.0),
                 source=source, verified_version=recipe["verified_version"], poe_patch=recipe["poe_patch"],
@@ -986,17 +1253,19 @@ class DivinationCardStrategyProvider:
                     "registry_version": self.registry.version, "registry_source": self.registry.source,
                     "definition_source": recipe["source"], "verified_version": recipe["verified_version"],
                     "poe_patch": recipe["poe_patch"], "active_poe_patch": active_poe_patch,
-                    "manual_actions": list(recipe["manual_actions"]), "variant": recipe["variant"],
+                    "manual_actions": list(recipe["manual_actions"]),
+                    "manual_verification": recipe["manual_verification"], "variant": recipe["variant"],
                     "corrupted": recipe["corrupted"], "item_level": recipe["item_level"],
                     "special_conditions": list(recipe["special_conditions"]), "card_market_key": recipe["card_market_key"],
                     "reward_market_keys": [outcome["reward_market_key"] for outcome in outcomes],
                     "quote_sources": sorted(set(quote_sources)), "quote_timestamps": sorted(set(quote_times)),
+                    "quote_kinds": sorted(set(quote_kinds)),
                     "outcome_liquidation": outcome_liquidation, "batch_ladder": recommended_ladder,
                     "eligibility": "deterministic" if recipe["deterministic"] else "trusted_finite_distribution",
                 },
                 inputs=[{"item": recipe["card"], "market_key": recipe["card_market_key"], "quantity": recipe["set_size"]}],
                 costs=[{"item": recipe["card"], "market_key": recipe["card_market_key"], "quantity": recipe["set_size"], "side": "buy"}],
-                outputs=outcome_outputs, execution_steps=list(recipe["manual_actions"]),
+                outputs=outcome_outputs, execution_steps=list(recipe["manual_actions"]), batch_plan=batch_plan,
             )
             routes.append(route)
         return routes

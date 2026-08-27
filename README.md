@@ -104,6 +104,9 @@ A route can remain theoretical or be absent when exact prices, buy-side depth, h
 - `web.poecdn.com/api/currency-exchange` is the documented Currency Exchange CDN API used for hourly historical exchange data.
 - poe.ninja supplies current market snapshots and league metadata.
 - Project-owner confirmation supports the existing trade-site paths `/api/trade/search`, `/api/trade/fetch`, and `/api/trade/data/static`. They are supported trade-site endpoints, **not** endpoints listed in the official GGG Developer API reference. The collector retains bounded requests and an identifying User-Agent.
+
+Optional trade-depth collection is enabled with `DEUSCFO_TRADE_DEPTH=1`. Deterministic unique rewards without buyer bids use only exact-name online listings that pass the conservative defaults: at least 3 nearby listings (`DEUSCFO_SELL_LISTING_MIN_COUNT`), a 15% median-centered cluster (`DEUSCFO_SELL_LISTING_CLUSTER_SPREAD`), and a 10% liquidation haircut (`DEUSCFO_SELL_LISTING_HAIRCUT`). Invalid settings revert to those defaults; shallow or unclustered results remain theoretical.
+
 The public release does not package a checked-in trade metadata snapshot. Trade metadata is fetched from the supported trade-site endpoint when available; redistribution provenance for any future offline capture must be recorded before it is shipped.
 
 Every result carries evidence and coverage limits where available. Missing history, absent coverage, stale leagues, and unavailable upstreams are surfaced as reasons to wait rather than replaced with estimates.
