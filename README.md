@@ -16,6 +16,14 @@ Captured from the packaged Windows service at a 1920×1080 browser viewport; scr
 
 *Configured Standard: zero stored rows and zero observed hours, so readiness truthfully remains a WAIT state while collection begins.*
 
+## CFO paper workflow
+
+This short walkthrough shows the useful path when the evidence gates permit a **DEPLOY** recommendation: run a PAPER capital plan, inspect the proposed allocation, create a paper portfolio, add the position, and track it without placing an order.
+
+[![Animated CFO PAPER workflow: run plan, review DEPLOY, create portfolio, add position, and track the open paper position](docs/screenshots/cfo-paper-workflow.webp)](docs/screenshots/cfo-paper-workflow.mp4)
+
+*Illustrative capture only: the displayed recommendation uses labeled non-observed values so the complete UI flow is visible. Production recommendations remain evidence-gated, and DeusCFO never executes the trade. Click the animation for the MP4.*
+
 ## Download and run
 
 ### Windows

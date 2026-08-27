@@ -1,4 +1,10 @@
 # Changelog
+## Unreleased
+
+### Documentation
+
+- Added a concise CFO PAPER workflow showcase centered on an illustrative DEPLOY recommendation, paper-portfolio creation, and adding an open paper position; production evidence gates and non-execution behavior are unchanged.
+
 ## 0.3.1 — 2026-08-26
 
 ### Fixed
