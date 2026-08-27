@@ -18,7 +18,7 @@ Captured from the packaged Windows service at a 1920×1080 browser viewport; scr
 
 ## Paper workflow
 
-The clip below is a local PAPER session. Bankroll values and the allocated candidate are **illustrative / non-observed** inputs (`DEUSCFO_ILLUSTRATIVE_SEED=1`); they still pass through the real capital allocator and UI. DeusCFO does not execute trades.
+The clip below is a local PAPER session using illustrative / non-observed inputs to show the capital-plan and paper-portfolio flow. DeusCFO does not execute trades.
 
 [![CFO PAPER workflow](docs/screenshots/cfo-paper-workflow.webp)](docs/screenshots/cfo-paper-workflow.mp4)
 
@@ -125,7 +125,5 @@ cd ..
 ```
 
 The explicit Vite workflow remains available with `python deuscfo.py dev`, or run the API and frontend separately. Focused backend tests and frontend checks are listed in the project workflow; do not commit runtime databases, `deuscfo.config.json`, raw captures, logs, or `frontend/dist`.
-
-To reproduce the README PAPER clip locally, start the API with `DEUSCFO_ILLUSTRATIVE_SEED=1`. The packaged launcher does not set this flag. Production evidence gates are unchanged.
 
 Planning history is under [`docs/design-history`](docs/design-history). Community and release notes are in [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md), [`CHANGELOG.md`](CHANGELOG.md), and [`docs/public-beta-release-notes.md`](docs/public-beta-release-notes.md).
