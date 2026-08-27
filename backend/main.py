@@ -25,6 +25,7 @@ import validation
 import capital
 import portfolio
 import strategies
+import illustrative_seed
 import cx_collector
 import cx_metadata
 import cx_queries
@@ -642,6 +643,8 @@ async def create_capital_plan(request: CapitalPlanRequest):
                 candidates.extend(strategies.DivinationCardStrategyProvider(
                     div_registry
                 ).discover(provider_context))
+        if chaos_per_divine is not None:
+            candidates = illustrative_seed.apply_illustrative_seed(candidates, chaos_per_divine)
         plan = capital.build_capital_plan(
             request.bankroll,
             request.preferences,
@@ -652,6 +655,8 @@ async def create_capital_plan(request: CapitalPlanRequest):
         )
         if chaos_per_divine is None:
             plan.reason = "WAIT: current chaos-per-divine rate unavailable from Currency data; no capital was allocated."
+        else:
+            plan.reason = illustrative_seed.label_plan_reason(plan.reason)
         simulation = plan.simulation
         recommendation_id = await portfolio.append_recommendation({
             "bankroll": plan.bankroll.model_dump(),
@@ -672,7 +677,7 @@ async def create_capital_plan(request: CapitalPlanRequest):
         result["requested_mode"] = request.mode
         result["mode_downgraded"] = plan.mode != request.mode
         paper_ideas = []
-        if request.mode in {"PAPER", "AGGRESSIVE-PAPER"}:
+        if request.mode in {"PAPER", "AGGRESSIVE-PAPER"} and not illustrative_seed.seed_enabled():
             paper_ideas = await cx_queries.cx_paper_ideas(
                 request.league, hours=max(3, int(request.hours)), limit=5,
             )
