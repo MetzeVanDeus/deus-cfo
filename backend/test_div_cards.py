@@ -33,6 +33,7 @@ def recipe(**changes):
         "corrupted": False,
         "item_level": None,
         "special_conditions": [],
+        "manual_verification": True,
         "deterministic": True,
         "verified_version": "3.0",
         "poe_patch": "3.28",
@@ -117,6 +118,42 @@ def test_invalid_sell_depth_returns_theoretical_route():
     assert route.outputs[0]["liquidation_capacity_sets"] == 0
 
 
+def test_clustered_unique_sell_listing_floor_is_plannable_and_auditable():
+    context = market_context(bankroll=100)
+    reward_key = "UniqueAccessory:test-orb"
+    context["prices"][reward_key] = context["prices"].pop("Currency:test-orb")
+    context["price_records"][reward_key] = context["price_records"].pop("Currency:test-orb")
+    sell_quote = context["execution_prices"].pop("Currency:test-orb")
+    sell_quote["sell_listing_floor_levels"] = sell_quote.pop("sell_levels")
+    sell_quote["quote_kind"] = "sell_listing_floor"
+    context["execution_prices"][reward_key] = sell_quote
+    context["budget_chaos"] = 50
+    route = DivinationCardStrategyProvider(
+        DivCardRegistry([recipe(
+            max_batch=1, reward_type="exact_unique", reward_market_key=reward_key,
+        )], version="3.0", source="test")
+    ).evaluate(context)[0]
+    assert route.status == "executable"
+    assert route.batch_plan is not None
+    assert route.batch_plan.expected_outcomes[0].liquidation_quote_kind == "sell_listing_floor"
+    assert route.outputs[0]["liquidation_quote_kind"] == "sell_listing_floor"
+    assert "sell_listing_floor" in route.verification_metadata["quote_kinds"]
+    assert any("not buyer-side executable depth" in reason for reason in route.reasons)
+
+
+def test_sell_listing_floor_cannot_enable_non_unique_reward():
+    context = market_context(bankroll=100)
+    sell_quote = context["execution_prices"]["Currency:test-orb"]
+    sell_quote["sell_listing_floor_levels"] = sell_quote.pop("sell_levels")
+    sell_quote["quote_kind"] = "sell_listing_floor"
+    route = DivinationCardStrategyProvider(
+        DivCardRegistry([recipe()], version="3.0", source="test")
+    ).evaluate(context)[0]
+    assert route.status == "theoretical"
+    assert route.batch_plan is None
+    assert route.market_capacity == 0
+
+
 def test_registry_is_versioned_strict_and_unique():
     registry = DivCardRegistry([recipe()], version="3.0", source="test")
     assert registry.records()[0]["card_market_key"] == "DivinationCard:test-card"
@@ -128,6 +165,45 @@ def test_registry_is_versioned_strict_and_unique():
         DivCardRegistry([recipe(card_market_key="DivinationCard")], version="3.0", source="test")
     with pytest.raises(ValueError, match="verified_version .* registry version"):
         DivCardRegistry([recipe(verified_version="2.9")], version="3.0", source="test")
+
+
+def test_registry_curation_report_keeps_invalid_records_rejected(tmp_path):
+    path = tmp_path / "cards.json"
+    path.write_text(json.dumps({
+        "version": "3.0",
+        "source": "test",
+        "poe_patch": "3.28",
+        "verified_leagues": ["Test"],
+        "recipes": [
+            recipe(),
+            recipe(id="bad-card", reward_type="random_reward", manual_verification=False),
+        ],
+    }), encoding="utf-8")
+    registry = DivCardRegistry.from_json(path)
+    health = registry.health_report(
+        active_poe_patch="3.29",
+        price_keys=["DivinationCard:test-card"],
+    )
+    assert health["accepted_count"] == health["rejected_count"] == 1
+    assert health["rejected"][0]["id"] == "bad-card"
+    assert health["unsupported_reward_categories"] == ["random_reward"]
+    assert health["missing_price_identities"] == ["Currency:test-orb"]
+    assert health["stale_patch_records"] == ["bad-card", "test-card"]
+
+
+def test_registry_requires_explicit_manual_verification():
+    with pytest.raises(ValueError, match="manual_verification"):
+        DivCardRegistry([recipe(manual_verification=False)], version="3.0", source="test")
+
+
+@pytest.mark.parametrize("conditions", [
+    {"variant": "alternate"},
+    {"item_level": 100},
+    {"special_conditions": ["foil"]},
+])
+def test_registry_rejects_conditions_missing_from_market_identity(conditions):
+    with pytest.raises(ValueError, match="unsupported by collected identity"):
+        DivCardRegistry([recipe(**conditions)], version="3.0", source="test")
 
 def test_poe_patch_metadata_is_separate_and_active_patch_is_required_for_verification():
     registry = DivCardRegistry([recipe()], version="3.0", source="test", poe_patch="3.28")
@@ -149,7 +225,7 @@ def test_unknown_depth_is_unscalable_and_not_discoverable():
     assert route.recommended_capacity == 0
     assert route.executable_roi is None
     assert provider.discover(market_context(depth=False)) == []
-    assert any("depth unavailable" in reason for reason in route.reasons)
+    assert any("liquidity evidence unavailable" in reason for reason in route.reasons)
     assert route.status == "theoretical"
 
 
@@ -217,6 +293,8 @@ def test_default_registry_loads_curated_version():
     registry = default_div_card_registry()
     assert registry.version == "3.0.0"
     assert registry.records()[0]["deterministic"] is True
+    assert registry.records()[0]["manual_verification"] is True
+    assert registry.records()[0]["source"] == "https://www.poewiki.net/wiki/The_Doctor"
 
 def test_active_patch_resolves_from_verified_league_without_environment(monkeypatch):
     monkeypatch.delenv("DEUSCFO_ACTIVE_POE_PATCH", raising=False)
@@ -246,6 +324,107 @@ def test_profit_routes_endpoint_exposes_card_routes(monkeypatch):
     assert result["routes"]
     assert result["routes"][0]["strategy_family"] == "divination_card"
     assert result["routes"][0]["capacity_units"] == "sets"
+
+
+def test_profit_routes_fail_closed_on_ambiguous_market_variant(monkeypatch):
+    rows = {
+        "DivinationCard": [{
+            "item_id": "test-card", "item_name": "Test Card", "variant": "",
+            "price_chaos": 5, "source": "test", "confidence_grade": "A",
+        }],
+        "Currency": [
+            {
+                "item_id": "test-orb", "item_name": "Test Orb", "variant": "",
+                "price_chaos": 3, "source": "test", "confidence_grade": "A",
+            },
+            {
+                "item_id": "test-orb", "item_name": "Test Orb", "variant": "alternate",
+                "price_chaos": 4, "source": "test", "confidence_grade": "A",
+            },
+        ],
+    }
+
+    async def latest(_league):
+        return rows
+
+    monkeypatch.setattr(main.market_data, "get_all_latest", latest)
+    monkeypatch.setattr(main, "resolve_active_poe_patch", lambda _league: asyncio.sleep(0, result="3.28"))
+    monkeypatch.setattr(
+        main.strategies,
+        "default_div_card_registry",
+        lambda: DivCardRegistry([recipe()], version="3.0", source="test"),
+    )
+    route = asyncio.run(main.get_profit_routes("Test", category="DivinationCard"))["routes"][0]
+    assert route["status"] == "insufficient_evidence"
+    assert route["market_capacity"] == 0
+    assert "ambiguous market identity: Currency:test-orb" in route["reasons"]
+
+
+def test_budgeted_route_returns_reconciled_manual_batch_plan(monkeypatch):
+    trade_url = "https://www.pathofexile.com/trade/search/Test/search-id"
+    rows = {
+        "DivinationCard": [{
+            "item_id": "test-card", "item_name": "Test Card", "price_chaos": 5,
+            "source": "test", "confidence_grade": "A",
+            "buy_levels": [{"price": 6, "quantity": 12}], "fee_rate": 0,
+            "observed_at": _RECENT_OBSERVED_AT, "confidence": 0.9, "trade_url": trade_url,
+        }],
+        "Currency": [{
+            "item_id": "test-orb", "item_name": "Test Orb", "price_chaos": 3,
+            "source": "test", "confidence_grade": "A",
+            "sell_levels": [{"price": 3.5, "quantity": 30}], "fee_rate": 0.05,
+            "observed_at": _RECENT_OBSERVED_AT, "confidence": 0.8,
+        }],
+    }
+
+    async def latest(_league):
+        return rows
+
+    monkeypatch.setattr(main.market_data, "get_all_latest", latest)
+    monkeypatch.setattr(main, "resolve_active_poe_patch", lambda _league: asyncio.sleep(0, result="3.28"))
+    monkeypatch.setattr(
+        main.strategies,
+        "default_div_card_registry",
+        lambda: DivCardRegistry([recipe(max_batch=3)], version="3.0", source="test"),
+    )
+    unplanned = asyncio.run(main.get_profit_routes("Test", category="DivinationCard"))
+    assert unplanned["routes"][0]["batch_plan"] is None
+    result = asyncio.run(main.get_profit_routes(
+        "Test",
+        category="DivinationCard",
+        budget_chaos=50,
+        horizon_hours=24,
+    ))
+    plan = result["routes"][0]["batch_plan"]
+    assert plan["set_count"] == plan["maximum_recommended_batch"] == 2
+    assert plan["exact_cards_to_buy"] == 8
+    assert plan["executable_cost_chaos"] == pytest.approx(48)
+    assert plan["executable_revenue_chaos"] == pytest.approx(66.5)
+    assert plan["executable_net_chaos"] == pytest.approx(18.5)
+    assert plan["minimum_target_sale_chaos"] == pytest.approx(48)
+    assert plan["expected_outcomes"][0]["expected_quantity"] == pytest.approx(20)
+    assert plan["active_effort_hours"] == pytest.approx(2)
+    assert plan["lock_time_min_hours"] == pytest.approx(3)
+    assert plan["lock_time_max_hours"] == pytest.approx(4)
+    assert plan["binding_constraint"] == "budget"
+    assert plan["trade_links"] == [{
+        "side": "buy",
+        "item": "Test Card",
+        "market_key": "DivinationCard:test-card",
+        "url": trade_url,
+    }]
+    assert result["registry_health"]["shadow_evaluation"][0]["status"] == "executable"
+
+
+@pytest.mark.parametrize(("name", "value"), [
+    ("budget_chaos", 0),
+    ("budget_chaos", float("inf")),
+    ("horizon_hours", -1),
+    ("horizon_hours", float("nan")),
+])
+def test_profit_routes_rejects_invalid_planning_inputs(name, value):
+    with pytest.raises(main.HTTPException, match="finite positive"):
+        asyncio.run(main.get_profit_routes("Test", **{name: value}))
 
 def test_actual_recipe_snapshot_ids_produce_theoretical_route(monkeypatch):
     async def latest(_league):
@@ -340,6 +519,8 @@ def test_profit_routes_fail_closed_without_matching_active_patch(monkeypatch):
     stale = asyncio.run(main.get_profit_routes("Allflame", category="DivinationCard"))
     assert stale["routes"] == []
     assert stale["patch_status"] == "mismatch"
+    assert stale["registry_health"]["stale_patch_records"] == ["the-doctor-to-headhunter"]
+    assert "the-doctor-to-headhunter" in stale["patch_reasons"][0]
 
 
 def test_capital_planning_receives_card_opportunity(monkeypatch, tmp_path):
@@ -488,7 +669,8 @@ def test_trade_depth_adapter_only_normalizes_buy_payload(monkeypatch):
             return None
 
         async def post(self, _url, *, json):
-            assert json["query"]["name"] == "Test Card"
+            assert json["query"].get("type") == "Test Card"
+            assert "name" not in json["query"]
             return Response("search")
 
         async def get(self, _url, *, params):
@@ -504,6 +686,9 @@ def test_trade_depth_adapter_only_normalizes_buy_payload(monkeypatch):
     ]
     assert "Currency:test-orb" not in quotes
     assert quotes["DivinationCard:test-card"]["source"] == "pathofexile_trade_api"
+    assert quotes["DivinationCard:test-card"]["trade_url"] == (
+        "https://www.pathofexile.com/trade/search/Test/search-card"
+    )
 
     async def unsupported_sell():
         return await collector.TradeDepthAdapter().quote(
@@ -511,6 +696,132 @@ def test_trade_depth_adapter_only_normalizes_buy_payload(monkeypatch):
         )
 
     assert asyncio.run(unsupported_sell()) is None
+
+
+def test_sell_listing_floor_clusters_exact_matches_and_haircuts_outliers(monkeypatch):
+    entries = [
+        {
+            "listing": {"indexed": f"2026-08-15T01:0{index}:00Z", "price": {"amount": price, "currency": "chaos"}},
+            "item": {"name": name, "typeLine": "Leather Belt", **conditions},
+        }
+        for index, (price, name, conditions) in enumerate([
+            (1, "Headhunter", {}),
+            (100, "Headhunter", {}),
+            (102, "Headhunter", {}),
+            (104, "Headhunter", {}),
+            (2, "Headhunter", {"corrupted": True}),
+            (0.5, "Wurm's Molt", {}),
+        ])
+    ]
+
+    class Response:
+        status_code = 200
+
+        def __init__(self, payload):
+            self.payload = payload
+
+        def json(self):
+            return self.payload
+
+    class Client:
+        async def post(self, _url, *, json):
+            assert json["query"]["name"] == "Headhunter"
+            return Response({"id": "headhunter-search", "result": [str(index) for index in range(len(entries))]})
+
+        async def get(self, _url, *, params):
+            return Response({"result": entries})
+
+    monkeypatch.setenv(collector.SELL_LISTING_MIN_COUNT_ENV, "3")
+    monkeypatch.setenv(collector.SELL_LISTING_CLUSTER_SPREAD_ENV, "0.15")
+    monkeypatch.setenv(collector.SELL_LISTING_HAIRCUT_ENV, "0.10")
+    quote_value = asyncio.run(collector.TradeDepthAdapter(limit=10).quote(
+        Client(), "Test", "Headhunter", side="sell_listing_floor", chaos_per_divine=10
+    ))
+    assert quote_value is not None
+    assert quote_value["sell_listing_floor_levels"] == [{"price": 90.0, "quantity": 3.0}]
+    assert quote_value["listing_sample_count"] == 4
+    assert quote_value["listing_cluster_count"] == 3
+    assert quote_value["listing_floor"] == 100
+    assert quote_value["sell_listing_floor"] == 90
+    assert quote_value["quote_kind"] == "sell_listing_floor"
+    assert quote_value["source"] == "pathofexile_trade_listing_floor"
+    assert quote_value["observed_at"] == "2026-08-15T01:01:00+00:00"
+
+
+def test_sell_listing_floor_uses_positive_default_haircut(monkeypatch):
+    monkeypatch.setenv(collector.SELL_LISTING_HAIRCUT_ENV, "0")
+    assert collector._sell_listing_settings()[2] == pytest.approx(0.10)
+
+
+def test_trade_fetches_are_batched_at_ten_ids(monkeypatch):
+    batch_sizes = []
+
+    class Response:
+        status_code = 200
+
+        def __init__(self, payload):
+            self.payload = payload
+
+        def json(self):
+            return self.payload
+
+    class Client:
+        async def post(self, _url, *, json):
+            return Response({"id": "search-id", "result": [str(index) for index in range(11)]})
+
+        async def get(self, url, *, params):
+            ids = url.rsplit("/", 1)[-1].split(",")
+            batch_sizes.append(len(ids))
+            return Response({"result": [
+                {
+                    "listing": {"indexed": "2026-08-27T01:00:00Z", "price": {"amount": 100, "currency": "chaos"}},
+                    "item": {"name": "Headhunter", "typeLine": "Leather Belt"},
+                }
+                for _item_id in ids
+            ]})
+
+    monkeypatch.setenv(collector.TRADE_REQUEST_DELAY_ENV, "0")
+    quote_value = asyncio.run(collector.TradeDepthAdapter(limit=20).quote(
+        Client(), "Test", "Headhunter", side="sell_listing_floor", chaos_per_divine=10
+    ))
+    assert quote_value is not None
+    assert batch_sizes == [10, 1]
+    assert quote_value["listing_cluster_count"] == 11
+
+
+def test_sell_listing_floor_rejects_missing_listing_timestamps():
+    entries = [
+        {"listing": {"price": {"amount": 100, "currency": "chaos"}}, "item": {"name": "Headhunter"}}
+        for _index in range(3)
+    ]
+    assert collector._sell_listing_floor_quote(
+        entries, chaos_per_divine=10, trade_url="https://www.pathofexile.com/trade/search/Test/search-id"
+    ) is None
+
+
+
+def test_sell_listing_floor_rejects_future_listing_timestamps():
+    entries = [
+        {
+            "listing": {"indexed": indexed, "price": {"amount": 100, "currency": "chaos"}},
+            "item": {"name": "Headhunter"},
+        }
+        for indexed in ("2026-08-27T01:00:00Z", "2026-08-27T01:01:00Z", "2099-01-01T00:00:00Z")
+    ]
+    assert collector._sell_listing_floor_quote(
+        entries, chaos_per_divine=10, trade_url="https://www.pathofexile.com/trade/search/Test/search-id"
+    ) is None
+
+@pytest.mark.parametrize("prices", [[100, 102], [1, 100, 200]])
+def test_sell_listing_floor_rejects_shallow_or_unclustered_results(prices):
+    entries = [
+        {"listing": {"indexed": "2026-08-15T01:00:00Z", "price": {"amount": price, "currency": "chaos"}},
+         "item": {"name": "Headhunter"}}
+        for price in prices
+    ]
+    assert collector._sell_listing_floor_quote(
+        entries, chaos_per_divine=10, trade_url="https://www.pathofexile.com/trade/search/Test/search-id"
+    ) is None
 
 
 def test_trade_depth_uses_zero_when_divine_rate_unavailable(monkeypatch):

@@ -5,6 +5,7 @@ import json
 import math
 import os
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlsplit
 
 import aiosqlite
 
@@ -347,7 +348,7 @@ def validate_execution_quote(value) -> dict | None:
     if not isinstance(value, dict):
         return None
     result = {}
-    for side in ("buy_levels", "sell_levels", "ask_levels"):
+    for side in ("buy_levels", "sell_levels", "ask_levels", "sell_listing_floor_levels"):
         levels = value.get(side)
         if levels is None:
             continue
@@ -402,6 +403,65 @@ def validate_execution_quote(value) -> dict | None:
             or not 0 <= value[field] < 1
         ):
             return None
+    trade_url = value.get("trade_url")
+    if trade_url is not None:
+        if not isinstance(trade_url, str):
+            return None
+        parsed = urlsplit(trade_url)
+        parts = [part for part in parsed.path.split("/") if part]
+        if (
+            parsed.scheme != "https"
+            or parsed.netloc != "www.pathofexile.com"
+            or len(parts) != 4
+            or parts[:2] != ["trade", "search"]
+            or parsed.query
+            or parsed.fragment
+        ):
+            return None
+    if "sell_listing_floor_levels" in result:
+        if value.get("quote_kind") != "sell_listing_floor" or trade_url is None:
+            return None
+        numeric_fields = (
+            "listing_floor", "sell_listing_floor", "liquidation_haircut",
+            "listing_cluster_depth", "listing_cluster_spread",
+        )
+        if any(
+            isinstance(value.get(field), bool)
+            or not isinstance(value.get(field), (int, float))
+            or not math.isfinite(float(value[field]))
+            for field in numeric_fields
+        ):
+            return None
+        sample_count = value.get("listing_sample_count")
+        cluster_count = value.get("listing_cluster_count")
+        floor_levels = result["sell_listing_floor_levels"]
+        adjusted_from_haircut = value["listing_floor"] * (1 - value["liquidation_haircut"])
+        if (
+            isinstance(sample_count, bool)
+            or not isinstance(sample_count, int)
+            or isinstance(cluster_count, bool)
+            or not isinstance(cluster_count, int)
+            or source != "pathofexile_trade_listing_floor"
+            or sample_count < cluster_count
+            or cluster_count < 3
+            or len(floor_levels) != 1
+            or value["listing_floor"] <= 0
+            or value["sell_listing_floor"] <= 0
+            or value["sell_listing_floor"] > value["listing_floor"]
+            or not 0.01 <= value["liquidation_haircut"] <= 0.5
+            or not math.isclose(value["sell_listing_floor"], adjusted_from_haircut, rel_tol=1e-9, abs_tol=1e-9)
+            or not math.isclose(floor_levels[0]["price"], value["sell_listing_floor"], rel_tol=1e-9, abs_tol=1e-9)
+            or not math.isclose(value["listing_cluster_depth"], cluster_count, rel_tol=1e-9, abs_tol=1e-9)
+            or not math.isclose(floor_levels[0]["quantity"], value["listing_cluster_depth"], rel_tol=1e-9, abs_tol=1e-9)
+            or not 0.01 <= value["listing_cluster_spread"] <= 0.5
+        ):
+            return None
+        result.update({
+            "quote_kind": "sell_listing_floor",
+            **{field: value[field] for field in numeric_fields},
+            "listing_sample_count": sample_count,
+            "listing_cluster_count": cluster_count,
+        })
     fee = float(value.get("fee_rate", 0))
     result.update({
         "buy_fee_rate": float(value.get("buy_fee_rate", fee)),
@@ -411,6 +471,8 @@ def validate_execution_quote(value) -> dict | None:
         "source": source,
         "stale": stale,
     })
+    if trade_url is not None:
+        result["trade_url"] = trade_url
     return result
 
 

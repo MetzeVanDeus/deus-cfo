@@ -915,12 +915,14 @@ async def list_divination_cards():
         "poe_patch": registry.poe_patch,
         "verified_leagues": sorted(registry.verified_leagues),
         "recipes": list(registry.records()),
+        "health": registry.health_report(),
     }
 
 def _latest_market_context(latest: dict) -> dict:
     prices: dict[str, dict] = {}
     price_records: dict[str, dict] = {}
     execution_prices: dict[str, dict] = {}
+    market_variants: dict[str, set[str]] = {}
     for market_category, rows in latest.items():
         for row in rows:
             item_id = str(row.get("item_id") or "")
@@ -931,6 +933,7 @@ def _latest_market_context(latest: dict) -> dict:
                 price_records[key] = row
                 prices.setdefault(item, row)
                 price_records.setdefault(item, row)
+                market_variants.setdefault(key, set()).add(str(row.get("variant") or ""))
             quote = row.get("execution_quote")
             if isinstance(quote, str):
                 try:
@@ -947,6 +950,7 @@ def _latest_market_context(latest: dict) -> dict:
                     "stale": bool(row.get("stale", False)),
                     "confidence": row.get("confidence"),
                     "source": row.get("source"),
+                    "trade_url": row.get("trade_url"),
                 }
             if isinstance(quote, dict):
                 for item in {item_id, item_name} - {""}:
@@ -964,6 +968,9 @@ def _latest_market_context(latest: dict) -> dict:
         "price_records": price_records,
         "execution_prices": execution_prices,
         "chaos_per_divine": chaos_per_divine,
+        "ambiguous_market_keys": sorted(
+            key for key, variants in market_variants.items() if len(variants) > 1
+        ),
     }
 
 
@@ -988,28 +995,53 @@ async def get_profit_routes(
     league: str,
     category: str | None = None,
     poe_patch: str | None = None,
+    budget_chaos: float | None = None,
+    horizon_hours: float | None = None,
 ):
-    """Evaluate routes using explicit active PoE patch metadata.
+    """Evaluate read-only routes and optional budget-bounded manual batch plans.
 
     ``poe_patch`` is retained only for response compatibility; callers cannot
     override the active metadata used for verification.
     """
-    if category and category not in ALL_CATEGORIES and category not in {"Transformation", "Assembly", "VendorTransformation", "ArbitrageGraph", "SixLink"}:
+    for name, amount in (("budget_chaos", budget_chaos), ("horizon_hours", horizon_hours)):
+        if amount is not None and (
+            isinstance(amount, bool)
+            or not isinstance(amount, (int, float))
+            or not math.isfinite(float(amount))
+            or amount <= 0
+        ):
+            raise HTTPException(status_code=400, detail=f"{name} must be a finite positive number")
+    if category and category not in ALL_CATEGORIES and category not in {
+        "Transformation", "Assembly", "VendorTransformation", "ArbitrageGraph", "SixLink",
+    }:
         raise HTTPException(status_code=400, detail=f"unknown category: {category}")
     active_poe_patch = await resolve_active_poe_patch(league)
     market = _latest_market_context(await market_data.get_all_latest(league))
     context = {"league": league, "category": category, "active_poe_patch": active_poe_patch, **market}
+    if budget_chaos is not None:
+        context["budget_chaos"] = float(budget_chaos)
+    if horizon_hours is not None:
+        context["capacity_horizon_hours"] = float(horizon_hours)
     routes = list(strategies.TransformationStrategyProvider(
         strategies.default_transformation_registry()
     ).evaluate(context))
     routes.extend(strategies.default_deferred_strategy_provider().evaluate(context))
     div_registry = strategies.default_div_card_registry() if category in (None, "DivinationCard") else None
+    registry_health = (
+        div_registry.health_report(
+            active_poe_patch=active_poe_patch,
+            price_keys=list(market["price_records"]),
+        )
+        if div_registry is not None
+        else None
+    )
     if not active_poe_patch:
         patch_reasons = ["active PoE patch metadata is unknown; divination-card recipes are withheld"]
     elif div_registry is not None and active_poe_patch != div_registry.poe_patch:
+        stale_ids = ", ".join(record["id"] for record in div_registry.records()) or "none"
         patch_reasons = [
             f"active PoE patch {active_poe_patch} does not match recipe patch {div_registry.poe_patch}; "
-            "divination-card recipes are withheld"
+            f"stale divination-card recipes withheld: {stale_ids}"
         ]
     else:
         patch_reasons = ["active PoE patch metadata resolved"]
@@ -1019,11 +1051,20 @@ async def get_profit_routes(
         patch_status = "mismatch"
     else:
         patch_status = "resolved"
+    card_routes = []
     if div_registry is not None and active_poe_patch == div_registry.poe_patch:
-        routes.extend(strategies.DivinationCardStrategyProvider(
-            div_registry
-        ).evaluate(context))
-    return {
+        card_routes = list(strategies.DivinationCardStrategyProvider(div_registry).evaluate(context))
+        routes.extend(card_routes)
+    if registry_health is not None:
+        registry_health["shadow_evaluation"] = [
+            {
+                "id": route.transformation_id,
+                "status": route.status,
+                "reasons": list(route.reasons),
+            }
+            for route in card_routes
+        ]
+    response = {
         "league": league,
         "category": category,
         "poe_patch": active_poe_patch,
@@ -1038,6 +1079,9 @@ async def get_profit_routes(
             ),
         )],
     }
+    if registry_health is not None:
+        response["registry_health"] = registry_health
+    return response
 
 
 class TransformationEvaluateRequest(BaseModel):

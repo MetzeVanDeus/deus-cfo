@@ -1,9 +1,32 @@
 # Changelog
 ## Unreleased
 
+## 0.4.0 — 2026-08-27
+
 ### Added
 
-- README PAPER workflow capture at `docs/screenshots/cfo-paper-workflow.mp4`.
+- Added a typed, budget-bounded `batch_plan` to existing profit routes with exact card quantities, expected outcomes, cumulative-depth cost/revenue/net, break-even proceeds, effort and lock ranges, maximum recommended batch, binding constraint, and advisory trade links.
+- Added finite-positive `budget_chaos` and `horizon_hours` inputs to `/api/profit-routes`; requests without a budget remain read-only and omit the plan.
+- Added divination-card registry health and curation diagnostics for accepted and rejected records, missing market identities, stale patch records, unsupported reward categories, and read-only shadow-evaluation results.
+- Added exact-match deterministic unique-reward sell-listing collection with ten-ID fetch batching, a minimum three-listing nearby-price cluster, isolated-outlier rejection, a strictly positive configurable haircut, and persisted `sell_listing_floor` provenance.
+- Added README PAPER workflow capture at `docs/screenshots/cfo-paper-workflow.mp4`.
+
+### Changed
+
+- Curated the existing Doctor → Headhunter definition with explicit manual verification and a direct definition source; no unsupported recipes or probabilistic rewards were added.
+- Added the Profit Routes budget/horizon controls and batch-plan display, including exact quantities, Chaos economics, effort/lock units, constraints, expected outcomes, and safe manual search links.
+- Preserved validated Path of Exile trade-search URLs with collected execution quotes so the planner can surface them without submitting searches, sending whispers, or executing game input.
+- Allowed deterministic unique rewards without buyer bids to use a conservative haircut sell-listing floor for manual batch planning; buyer-side executable depth and sell-listing evidence remain explicitly distinguishable in route outputs, batch plans, reasons, and verification metadata.
+
+### Fixed
+
+- Failed closed on ambiguous market variants, missing exact reward prices, stale recipe patches, malformed trade links, and random/corrupted/influenced records presented as deterministic.
+- Reported exact stale recipe IDs during patch rollover and withheld every mismatched divination-card route instead of carrying old verification forward.
+- Kept unique-reward routes fail-closed when exact listing identity, minimum nearby depth, price clustering, quote freshness, or provenance validation is missing.
+
+### Release
+
+- Bumped the frontend package and lockfile to `0.4.0` for the additive profit-route planner contract and UI.
 
 ## 0.3.1 — 2026-08-26
 

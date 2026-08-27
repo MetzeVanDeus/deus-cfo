@@ -300,3 +300,39 @@ def test_execution_quote_validation_preserves_stale_and_rejects_invalid_timestam
     }
     assert database.validate_execution_quote(quote)["stale"] is True
     assert database.validate_execution_quote({**quote, "observed_at": "now"}) is None
+
+
+def test_execution_quote_validation_preserves_sell_listing_floor_provenance():
+    quote = {
+        "sell_listing_floor_levels": [{"price": 90, "quantity": 3}],
+        "quote_kind": "sell_listing_floor",
+        "listing_floor": 100,
+        "sell_listing_floor": 90,
+        "liquidation_haircut": 0.1,
+        "listing_sample_count": 4,
+        "listing_cluster_count": 3,
+        "listing_cluster_depth": 3,
+        "listing_cluster_spread": 0.15,
+        "observed_at": "2026-08-15T00:00:00Z",
+        "confidence": 0.6,
+        "source": "pathofexile_trade_listing_floor",
+        "trade_url": "https://www.pathofexile.com/trade/search/Test/search-id",
+    }
+    validated = database.validate_execution_quote(quote)
+    assert validated is not None
+    assert validated["sell_listing_floor_levels"] == [{"price": 90.0, "quantity": 3.0}]
+    assert validated["quote_kind"] == "sell_listing_floor"
+    assert validated["listing_floor"] == 100
+    assert validated["sell_listing_floor"] == 90
+    assert validated["liquidation_haircut"] == 0.1
+    assert validated["source"] == "pathofexile_trade_listing_floor"
+    assert database.validate_execution_quote({**quote, "listing_cluster_count": 2}) is None
+    malformed = [
+        {"sell_listing_floor_levels": [{"price": 900, "quantity": 3}]},
+        {"sell_listing_floor_levels": [{"price": 90, "quantity": 4}]},
+        {"liquidation_haircut": 0},
+        {"source": "other"},
+        {"listing_cluster_depth": 4},
+        {"sell_listing_floor": 91},
+    ]
+    assert all(database.validate_execution_quote({**quote, **changes}) is None for changes in malformed)
