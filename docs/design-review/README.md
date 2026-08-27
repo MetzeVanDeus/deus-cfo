@@ -1,7 +1,7 @@
 # Visual design review — evidence captures
 
-Captures backing the visual-design issue for the terminal shell. They exist so the
-proposal can be judged against real rendering instead of a mockup.
+Captures backing [#47](https://github.com/MetzeVanDeus/deus-cfo/issues/47). They exist
+so the proposal can be judged against real rendering instead of a mockup.
 
 All four images are unmodified `google-chrome --headless` captures of the dev server
 (`.venv/bin/python deuscfo.py dev`, `http://127.0.0.1:3000`) at a 1280×760 viewport,
