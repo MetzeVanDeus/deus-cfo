@@ -1193,7 +1193,7 @@ class DivinationCardStrategyProvider:
                         executable_revenue_chaos=float(
                             selected["liquidation_values_chaos"][index] * float(outcome["probability"])
                         ),
-                        liquidation_quote_kind=validated_sell_quotes[index]["quote_kind"],
+                        liquidation_quote_kind=sell_quotes[index]["quote_kind"],
                     )
                     for index, outcome in enumerate(outcomes)
                 ]
