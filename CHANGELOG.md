@@ -1,4 +1,11 @@
 # Changelog
+## Unreleased
+
+### Added
+
+- Optional `DEUSCFO_ILLUSTRATIVE_SEED=1` development seed for local README PAPER captures. It is off by default and is not set by the packaged launcher. Seeded inputs are labeled illustrative / non-observed and still have to clear the existing allocator evidence gates.
+- README PAPER workflow capture at `docs/screenshots/cfo-paper-workflow.mp4`.
+
 ## 0.3.1 — 2026-08-26
 
 ### Fixed
