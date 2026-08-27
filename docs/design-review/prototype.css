@@ -1,0 +1,213 @@
+/*
+ * Throwaway prototype used only to produce docs/design-review/cfo-proposed.webp.
+ * Appended to frontend/src/index.css, screenshotted, then reverted.
+ * Not wired into the build. It covers the token, type, spacing, button and
+ * decoration-placement proposals so the screenshots show real rendering
+ * rather than a mockup.
+ */
+
+:root {
+  --line: #4a443a;         /* 2.03:1 on --bg  - decorative dividers only */
+  --line-strong: #6a6255;  /* 3.25:1 on --bg  - panel edges, input borders */
+  --field: #0e1011;        /* replaces --ink; sits above --bg, not below */
+  --surface: #151719;
+  --surface-raised: #1e2124;
+
+  --fs-micro: 11px;
+  --fs-small: 12px;
+  --fs-body: 13px;
+  --fs-panel: 15px;
+  --fs-metric: 20px;
+  --fs-display: 26px;
+
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --sp-6: 32px;
+
+  /* stands in for the self-hosted mono face the real change would ship */
+  --mono: ui-monospace, "DejaVu Sans Mono", "Liberation Mono", monospace;
+}
+
+.terminal-panel,
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  padding: var(--sp-4);
+  box-shadow: 0 6px 18px rgb(0 0 0 / 22%);
+}
+
+.terminal-panel + .terminal-panel,
+.league-panel,
+.readiness-panel,
+.plan-form,
+.paper-section,
+.journal-section,
+.output-grid,
+.metric-grid,
+.decision,
+.profit-routes {
+  margin-bottom: var(--sp-4);
+}
+
+.space-y-6 > :not([hidden]) ~ :not([hidden]),
+.space-y-4 > :not([hidden]) ~ :not([hidden]) {
+  margin-top: var(--sp-4);
+}
+
+.output-grid,
+.profit-routes {
+  gap: var(--sp-4);
+}
+
+.input {
+  background: var(--field);
+  border: 1px solid var(--line-strong);
+  min-height: 34px;
+  padding: 7px 10px;
+  border-radius: 4px;
+}
+
+.metric-grid {
+  background: var(--line-strong);
+  border: 1px solid var(--line-strong);
+}
+
+.metric {
+  background: var(--surface-raised);
+  padding: var(--sp-3) var(--sp-4);
+}
+
+.metric span {
+  font-size: var(--fs-micro);
+  letter-spacing: .06em;
+}
+
+.metric strong {
+  font-size: var(--fs-metric);
+  font-family: var(--mono);
+}
+
+.decision {
+  background: var(--surface-raised);
+  border: 1px solid var(--line-strong);
+  padding: var(--sp-5);
+}
+
+.decision-word {
+  font-size: var(--fs-display);
+  font-family: var(--mono);
+}
+
+h1 { font-size: var(--fs-display); }
+h2 { font-size: var(--fs-panel); }
+h3 { font-size: var(--fs-micro); letter-spacing: .06em; }
+
+.eyebrow,
+.brand-context,
+.market-state,
+.form-section-label {
+  font-size: var(--fs-micro);
+  letter-spacing: .08em;
+}
+
+.small,
+.field > span,
+.panel-title span,
+.paper-note,
+.allocation-legend,
+.empty-copy,
+.dense-table td small,
+.metric span {
+  font-size: var(--fs-small);
+}
+
+.dense-table th {
+  font-size: var(--fs-micro);
+  letter-spacing: .05em;
+  border-bottom: 1px solid var(--line-strong);
+}
+
+.dense-table td {
+  border-bottom: 1px solid var(--line);
+  font-family: var(--mono);
+  font-size: var(--fs-small);
+}
+
+.numeric,
+.distribution text {
+  font-family: var(--mono);
+}
+
+.footer {
+  font-size: var(--fs-micro);
+  letter-spacing: 0;
+  border-top: 1px solid var(--line-strong);
+}
+
+.page-head p,
+.muted,
+.paper-ideas-warning,
+.empty-state p {
+  max-width: 68ch;
+}
+
+.btn-primary {
+  padding: 9px 15px;
+  font-size: var(--fs-micro);
+  border-color: var(--brass-bright);
+}
+
+.btn-primary:disabled {
+  opacity: 1;
+  background: var(--surface-raised);
+  border-color: var(--line);
+  color: var(--muted);
+  box-shadow: none;
+}
+
+.btn-secondary {
+  border: 1px solid var(--brass);
+  border-radius: 4px;
+  padding: 9px 15px;
+  background: transparent;
+  color: var(--text);
+  font-weight: 600;
+  font-size: var(--fs-micro);
+  letter-spacing: .04em;
+}
+
+.btn-secondary:hover { background: rgb(182 151 90 / 12%); }
+
+/* stand-in for markup that would carry .btn-secondary directly */
+.paper-empty .btn-primary {
+  background: transparent;
+  color: var(--text);
+  border-color: var(--brass);
+  box-shadow: none;
+}
+
+/* reserve space for the decoration instead of letting it overlap content */
+.cfo-stage .page-head {
+  padding-right: 150px;
+  min-height: 104px;
+}
+
+.oracle-lens {
+  top: -4px;
+  right: 0;
+  width: 130px;
+}
+
+.oracle-lens-frame {
+  width: 120px;
+  height: 120px;
+  transform: scale(.7);
+  transform-origin: top center;
+  margin-bottom: -38px;
+}
+
+.oracle-lens-label { font-size: 9px; }
