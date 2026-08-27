@@ -1,4 +1,10 @@
 # Changelog
+## Unreleased
+
+### Added
+
+- README PAPER workflow capture at `docs/screenshots/cfo-paper-workflow.mp4`.
+
 ## 0.3.1 — 2026-08-26
 
 ### Fixed

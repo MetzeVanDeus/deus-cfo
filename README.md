@@ -16,6 +16,12 @@ Captured from the packaged Windows service at a 1920×1080 browser viewport; scr
 
 *Configured Standard: zero stored rows and zero observed hours, so readiness truthfully remains a WAIT state while collection begins.*
 
+## Paper workflow
+
+The clip below is a local PAPER session using illustrative / non-observed inputs to show the capital-plan and paper-portfolio flow. DeusCFO does not execute trades.
+
+[![CFO PAPER workflow](docs/screenshots/cfo-paper-workflow.webp)](docs/screenshots/cfo-paper-workflow.mp4)
+
 ## Download and run
 
 ### Windows
