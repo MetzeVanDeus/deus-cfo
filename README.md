@@ -24,7 +24,7 @@ A first run often stays on `WAIT` until enough history exists. The clip below is
 
 ![Paper workflow showcase](docs/screenshots/paper-workflow-showcase.webp)
 
-*Recorded with `?showcase=1`. The amber banner (“SHOWCASE · non-observed values…”) is required. Default runs never insert these opportunities; validated DEPLOY remains behind the existing evidence gates.*
+*Illustration only: non-observed values were used so DEPLOY and the paper-portfolio path are visible. The running app does not insert demo opportunities; validated DEPLOY remains behind the existing evidence gates.*
 
 ![Showcase DEPLOY recommendation](docs/screenshots/paper-workflow-showcase-deploy.webp)
 

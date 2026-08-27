@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { api, SHOWCASE_NON_OBSERVED } from './lib/helpers'
+import { api } from './lib/helpers'
 import { DashboardTab } from './components/DashboardTab'
 import { SignalsTab } from './components/SignalsTab'
 import { ExplorerTab } from './components/ExplorerTab'
@@ -60,7 +60,6 @@ function App() {
 
   return <div className="app-shell">
     <header className="topbar"><div className="brand"><span className="brand-mark">D</span><strong>DeusCFO</strong><span className="brand-divider" /><span className="brand-context">CAPITAL INTELLIGENCE</span></div><nav className="topnav" aria-label="Primary navigation">{TABS.map((tab) => <button key={tab.id} className={activeTab === tab.id ? 'nav-active' : ''} aria-current={activeTab === tab.id ? 'page' : undefined} onClick={() => setActiveTab(tab.id)}>{tab.label}</button>)}</nav><div className="topbar-status"><span className="status-dot" />{selectedLeague || 'NO LEAGUE'}</div></header>
-    {SHOWCASE_NON_OBSERVED && <div className="boot-warning" role="status">SHOWCASE · non-observed values for a UI walkthrough. Not live market evidence.</div>}
     {Object.values(bootErrors).filter(Boolean).length > 0 && <div className="boot-warning">{Object.values(bootErrors).filter(Boolean).join(' | ')} <button className="text-button" onClick={retryBoot}>RETRY</button></div>}
     <main className="main-shell">
       <section className="terminal-panel league-panel" aria-labelledby="league-heading"><div><div className="eyebrow">SHARED MARKET CONTEXT</div><h2 id="league-heading">{migrationRequired ? 'League migration' : selectedLeague ? 'Active league' : 'First-run league'}</h2><p className="muted">The UI and collector intentionally use one local league setting. Choose a live league, then save it.</p></div><div className="league-controls"><select className="input" aria-label="Configured league" value={leagueDraft} onChange={(event) => setLeagueDraft(event.target.value)}><option value="">Choose a live league</option>{leagues.map((league) => <option key={league.id} value={league.id}>{league.name || league.text || league.id}</option>)}</select><button className="btn-primary" disabled={!liveLeague || savingLeague} onClick={saveLeague}>{savingLeague ? 'SAVING…' : 'SAVE LEAGUE'}</button></div>{leagueMessage && <p className="muted" role="status">{leagueMessage}</p>}</section>
