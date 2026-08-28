@@ -215,7 +215,7 @@ h3 {
 }
 .terminal-panel,.card {
   background:var(--surface);
-  border:1px solid var(--line-strong);
+  border:1px solid var(--outline);
   border-radius:7px;
   padding:var(--sp-4);
   box-shadow:0 5px 16px rgb(0 0 0 / 18%), inset 0 1px 0 rgb(255 255 255 / 2%);
@@ -399,7 +399,7 @@ a.btn-primary,a.btn-secondary {
   border-radius:7px;
   margin-bottom:var(--sp-3);
   background:var(--surface-raised);
-  border:1px solid var(--line-strong);
+  border:1px solid var(--outline);
 }
 .decision-deploy {
   border-left:3px solid var(--positive);
@@ -851,7 +851,7 @@ a.btn-primary,a.btn-secondary {
 .update-modal {
   width:min(420px, 100%);
   padding:var(--sp-5);
-  border:1px solid var(--line);
+  border:1px solid var(--outline);
   background:var(--surface);
   box-shadow:0 16px 40px rgb(0 0 0 / 35%);
 }
@@ -941,7 +941,7 @@ a.btn-primary,a.btn-secondary {
   text-shadow:0 0 18px rgb(121 201 154 / 18%);
 }
 .profit-route {
-  border-color:color-mix(in srgb,var(--brass) 42%,var(--line));
+  border-color:color-mix(in srgb,var(--brass) 42%,var(--outline));
   box-shadow:0 8px 22px rgb(0 0 0 / 22%), inset 3px 0 0 rgb(182 151 90 / 55%);
 }
 .profit-route:hover {

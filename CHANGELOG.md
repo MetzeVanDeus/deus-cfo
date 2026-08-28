@@ -1,6 +1,10 @@
 # Changelog
 ## Unreleased
 
+### Changed
+
+- Restored the pre-surface-pass outline color on panels, cards, decision blocks, profit-route cards, and the update modal. Divider and field borders stay as they are.
+
 ### Added
 
 - Added a single `VERSION` source, a GitHub Releases update check, `GET /api/update/status`, and a top-bar update badge with a footer refresh control.
