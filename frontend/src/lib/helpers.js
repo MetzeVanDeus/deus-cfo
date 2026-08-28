@@ -92,3 +92,8 @@ export const fmtRelative = (iso) => {
   if (hrs < 24) return `${hrs}h ago`
   return `${Math.floor(hrs / 24)}d ago`
 }
+
+export const formatUpdateBadge = (version) => {
+  if (!version) return 'UPDATE AVAILABLE'
+  return `UPDATE AVAILABLE · ${version.startsWith('v') ? version : `v${version}`}`
+}
