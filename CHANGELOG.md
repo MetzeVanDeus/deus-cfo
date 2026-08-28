@@ -1,6 +1,10 @@
 # Changelog
 ## Unreleased
 
+### Changed
+
+- Restored brass outlines on panels, cards, decision blocks, and the update modal. Divider and field borders stay as they are.
+
 ### Added
 
 - Added a single `VERSION` source, a GitHub Releases update check, `GET /api/update/status`, and a top-bar update badge with a footer refresh control.
