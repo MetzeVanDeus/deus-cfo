@@ -20,7 +20,7 @@
   --brass-ink: #14120d;
   --brass-shadow: #6f512a;
   --flare: #e3be65;
-  --outline: color-mix(in srgb, var(--brass) 52%, #252218);
+  --outline: var(--brass);
   --allocation-free: #59564f;
   --warning-line: #564326;
   --warning-surface: #1b1710;
