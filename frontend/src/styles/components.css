@@ -218,7 +218,7 @@ h3 {
   border:1px solid var(--outline);
   border-radius:7px;
   padding:var(--sp-4);
-  box-shadow:0 5px 16px rgb(0 0 0 / 18%), inset 0 1px 0 rgb(255 255 255 / 2%);
+  box-shadow:0 5px 16px rgb(0 0 0 / 18%), inset 0 0 0 1px rgb(225 196 126 / 18%);
 }
 .card {
   padding:var(--sp-3);
@@ -400,6 +400,7 @@ a.btn-primary,a.btn-secondary {
   margin-bottom:var(--sp-3);
   background:var(--surface-raised);
   border:1px solid var(--outline);
+  box-shadow:inset 0 0 0 1px rgb(225 196 126 / 18%);
 }
 .decision-deploy {
   border-left:3px solid var(--positive);
@@ -853,7 +854,7 @@ a.btn-primary,a.btn-secondary {
   padding:var(--sp-5);
   border:1px solid var(--outline);
   background:var(--surface);
-  box-shadow:0 16px 40px rgb(0 0 0 / 35%);
+  box-shadow:0 16px 40px rgb(0 0 0 / 35%), inset 0 0 0 1px rgb(225 196 126 / 18%);
 }
 .update-modal h2 {
   margin:var(--sp-1) 0 var(--sp-3);
