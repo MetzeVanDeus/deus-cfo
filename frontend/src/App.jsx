@@ -6,6 +6,7 @@ import { ExplorerTab } from './components/ExplorerTab'
 import { CFOTab } from './components/CFOTab'
 import { StrategiesTab } from './components/StrategiesTab'
 import { ProfitRoutesTab } from './components/ProfitRoutesTab'
+import { ErrorState, LoadingState } from './components/ui'
 
 const TABS = [
   { id: 'cfo', label: 'CFO' },
@@ -72,7 +73,7 @@ function App() {
 class ErrorBoundary extends React.Component {
   state = { crashed: false }
   static getDerivedStateFromError() { return { crashed: true } }
-  render() { return this.state.crashed ? <div className="error-state" role="alert">This view crashed. <button className="text-button" onClick={() => window.location.reload()}>RELOAD</button></div> : this.props.children }
+  render() { return this.state.crashed ? <ErrorState message="This view crashed." onRetry={() => window.location.reload()} /> : this.props.children }
 }
 
 function ReadinessPanel({ league }) {
@@ -81,12 +82,13 @@ function ReadinessPanel({ league }) {
   const [loading, setLoading] = useState(true)
   const [backfilling, setBackfilling] = useState(false)
   const [message, setMessage] = useState('')
+  const [loadError, setLoadError] = useState('')
   useEffect(() => {
     let cancelled = false
-    setLoading(true); setMessage('')
+    setLoading(true); setMessage(''); setLoadError('')
     Promise.all([api.get('/coverage', { params: { league } }), api.get('/snapshot/status')]).then(([coverageResponse, statusResponse]) => {
       if (!cancelled) { setCoverage(Array.isArray(coverageResponse.data) ? coverageResponse.data : []); setStatus(statusResponse.data) }
-    }).catch(() => { if (!cancelled) setMessage('Readiness data is unavailable; collection may still be starting.') }).finally(() => { if (!cancelled) setLoading(false) })
+    }).catch(() => { if (!cancelled) setLoadError('Readiness data is unavailable; collection may still be starting.') }).finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
   }, [league])
   const backfill = async () => {
@@ -103,7 +105,7 @@ function ReadinessPanel({ league }) {
   }
   const snapshotHours = coverage.filter((row) => row.source === 'poe.ninja').reduce((max, row) => Math.max(max, Number(row.hours_present || 0)), 0)
   const exchangeHours = Number(coverage.find((row) => row.category === 'Currency Exchange')?.hours_present || 0)
-  return <section className="terminal-panel readiness-panel" aria-labelledby="readiness-heading"><div className="panel-title"><h2 id="readiness-heading">Data readiness</h2><span>{loading ? 'CHECKING…' : `${snapshotHours} snapshot hours · ${exchangeHours} exchange hours`}</span></div>{loading ? <p className="muted">Checking stored history for {league}…</p> : <><p className="muted">Signals use poe.ninja snapshots collected while DeusCFO runs. The backfill below only adds official Currency Exchange history used by exchange-aware routes.</p><div className="metric-grid"><div className="metric"><span>Snapshot rows</span><strong>{status?.total_rows?.toLocaleString?.() || '0'}</strong></div><div className="metric"><span>Signal snapshot hours</span><strong>{snapshotHours}</strong></div><div className="metric"><span>Exchange history hours</span><strong>{exchangeHours}</strong></div><div className="metric"><span>Last snapshot</span><strong>{status?.last_snapshot_per_league?.[league] ? new Date(status.last_snapshot_per_league[league]).toLocaleString() : 'Not yet'}</strong></div></div><button className="text-button" type="button" disabled={backfilling} onClick={backfill}>{backfilling ? 'BACKFILLING…' : 'BACKFILL CURRENCY EXCHANGE HISTORY'}</button>{message && <p className="paper-note">{message}</p>}</>}</section>
+  return <section className="terminal-panel readiness-panel" aria-labelledby="readiness-heading"><div className="panel-title"><h2 id="readiness-heading">Data readiness</h2><span>{loading ? 'CHECKING…' : `${snapshotHours} snapshot hours · ${exchangeHours} exchange hours`}</span></div>{loading ? <LoadingState text={`Checking stored history for ${league}…`} /> : loadError ? <ErrorState message={loadError} /> : <><p className="muted">Signals use poe.ninja snapshots collected while DeusCFO runs. The backfill below only adds official Currency Exchange history used by exchange-aware routes.</p><div className="metric-grid"><div className="metric"><span>Snapshot rows</span><strong>{status?.total_rows?.toLocaleString?.() || '0'}</strong></div><div className="metric"><span>Signal snapshot hours</span><strong>{snapshotHours}</strong></div><div className="metric"><span>Exchange history hours</span><strong>{exchangeHours}</strong></div><div className="metric"><span>Last snapshot</span><strong>{status?.last_snapshot_per_league?.[league] ? new Date(status.last_snapshot_per_league[league]).toLocaleString() : 'Not yet'}</strong></div></div><button className="btn-secondary" type="button" disabled={backfilling} onClick={backfill}>{backfilling ? 'BACKFILLING…' : 'BACKFILL CURRENCY EXCHANGE HISTORY'}</button>{message && <p className="paper-note">{message}</p>}</>}</section>
 }
 
 export default App

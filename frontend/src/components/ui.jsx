@@ -7,6 +7,18 @@ export function SignalBadge({ type }) {
 }
 export function SourceBadge({ source }) { return <span className="badge">{source === 'regime' ? 'Regime' : 'Anomaly'}</span> }
 export function ConfidenceBar({ score }) { const pct = Math.round((score || 0) * 100); return <span className="compact-confidence">{pct}%</span> }
-export function LoadingState({ text = 'Loading...' }) { return <div className="loading-state"><span className="spinner" /><span>{text}</span></div> }
-export function EmptyState({ title, message }) { return <div className="empty-state"><div className="eyebrow">NO DATA</div><h3>{title}</h3><p>{message}</p></div> }
-export function ErrorState({ message, onRetry }) { return <div className="error-state" role="alert">{message}{onRetry && <button className="text-button" onClick={onRetry}>RETRY</button>}</div> }
+export function StateBlock({ kind = 'empty', eyebrow, title, message, action, compact = false }) {
+  const role = kind === 'error' ? 'alert' : kind === 'loading' ? 'status' : undefined
+  return <div className={`state state-${kind}${compact ? ' state-compact' : ''}`} role={role}>
+    {kind === 'loading' && <span className="spinner" aria-hidden="true" />}
+    <div className="state-copy">
+      {eyebrow && <div className="eyebrow">{eyebrow}</div>}
+      {title && <h3>{title}</h3>}
+      {message && <p>{message}</p>}
+    </div>
+    {action && <div className="state-action">{action}</div>}
+  </div>
+}
+export function LoadingState({ text = 'Loading...' }) { return <StateBlock kind="loading" eyebrow="WORKING" title={text} /> }
+export function EmptyState({ eyebrow = 'NO DATA', title, message, action, compact = false }) { return <StateBlock kind="empty" eyebrow={eyebrow} title={title} message={message} action={action} compact={compact} /> }
+export function ErrorState({ message, onRetry }) { return <StateBlock kind="error" eyebrow="ERROR" title="Unable to load" message={message} action={onRetry && <button className="text-button" onClick={onRetry}>RETRY</button>} /> }
