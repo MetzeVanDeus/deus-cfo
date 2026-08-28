@@ -7,23 +7,24 @@ export default {
   theme: {
     extend: {
       colors: {
-        // Dracula theme
+        // Legacy class names mapped onto the brass terminal tokens.
+        // Component migration is tracked separately; no second palette lives here.
         dracula: {
-          bg:        '#282a36',
-          current:   '#44475a',
-          fg:        '#f8f8f2',
-          comment:   '#6272a4',
-          cyan:      '#8be9fd',
-          green:     '#50fa7b',
-          orange:    '#ffb86c',
-          pink:      '#ff79c6',
-          purple:    '#bd93f9',
-          red:       '#ff5555',
-          yellow:    '#f1fa8c',
+          bg:        'var(--bg)',
+          current:   'var(--surface-raised)',
+          fg:        'var(--text)',
+          comment:   'var(--muted)',
+          cyan:      'var(--info)',
+          green:     'var(--positive)',
+          orange:    'var(--warning)',
+          pink:      'var(--negative)',
+          purple:    'var(--brass)',
+          red:       'var(--negative)',
+          yellow:    'var(--brass-bright)',
         },
       },
       fontFamily: {
-        mono: ['JetBrains Mono', 'Fira Code', 'monospace'],
+        mono: ['ui-monospace', 'SFMono-Regular', 'Consolas', 'Liberation Mono', 'monospace'],
       },
     },
   },
