@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { api } from '../lib/helpers'
+import { EmptyState } from './ui'
 
 export function FlipFinder({ categories, selectedLeague }) {
   const [selectedCategory, setSelectedCategory] = useState('Currency')
@@ -188,19 +189,11 @@ export function FlipFinder({ categories, selectedLeague }) {
       )}
 
       {!showResults && !loading && !error && (
-        <div className="empty-state">
-          <div className="eyebrow">FLIP SCANNER READY</div>
-          <h3>Ready to Find Flips</h3>
-          <p>Pick a league and category, set your budget, and click "Find Flips" to see dip-buy candidates.</p>
-        </div>
+        <EmptyState eyebrow="FLIP SCANNER READY" title="Ready to Find Flips" message="Pick a league and category, set your budget, and click Find Flips to see dip-buy candidates." />
       )}
 
       {showResults && results.length === 0 && !loading && (
-        <div className="empty-state">
-          <div className="eyebrow">NO MATCHES</div>
-          <h3>No Candidates In Budget</h3>
-          <p>Nothing in this category within your {budgetAmount} {currencyName(budgetCurrency)} budget cleared the flip signal threshold.</p>
-        </div>
+        <EmptyState eyebrow="NO MATCHES" title="No Candidates In Budget" message={`Nothing in this category within your ${budgetAmount} ${currencyName(budgetCurrency)} budget cleared the flip signal threshold.`} />
       )}
     </div>
   )
