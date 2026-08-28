@@ -1,0 +1,42 @@
+:root {
+  --bg: #0b0c0e;
+  --surface-sunken: #0e1011;
+  --surface: #151719;
+  --surface-raised: #1e2124;
+  --surface-error: color-mix(in srgb, var(--surface) 88%, var(--negative));
+  --line: #4a443a;
+  --line-strong: #6a6255;
+  --field: var(--surface-sunken);
+  --text: #eee9dc;
+  --muted: #9d9a90;
+  --positive: #79c99a;
+  --negative: #d88786;
+  --warning: #d7aa61;
+  --info: #82b8c4;
+  --brass: #b6975a;
+  --brass-bright: #e1c47e;
+  --brass-dark: #9b7a42;
+  --brass-hover: #d1ad66;
+  --brass-ink: #14120d;
+  --brass-shadow: #6f512a;
+  --flare: #e3be65;
+  --allocation-free: #59564f;
+  --warning-line: #564326;
+  --warning-surface: #1b1710;
+
+  --fs-micro: 11px;
+  --fs-small: 12px;
+  --fs-body: 13px;
+  --fs-panel: 15px;
+  --fs-metric: 20px;
+  --fs-display: 26px;
+
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --sp-6: 32px;
+
+  --font-mono: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+}
