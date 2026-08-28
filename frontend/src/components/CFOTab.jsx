@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import { api, fmtTime } from '../lib/helpers'
 import { ErrorState, LoadingState } from './ui'
+import { OracleLens } from './OracleLens'
 
 const initialBankroll = { total_net_worth: 0, liquid_currency: 0, currently_invested: 0, reserved_capital: 0 }
 const initialPreferences = { risk_tolerance: 'medium', desired_horizon_hours: 12, minimum_liquidity: 'medium', maximum_effort: 'medium', minimum_reserve_percent: 20, minimum_reserve_amount: 0, max_single_position_percent: 30, max_category_exposure_percent: 50, max_correlated_exposure_percent: 50 }
@@ -150,7 +151,7 @@ export function CFOTab({ selectedLeague }) {
   const allocation = useMemo(() => { if (!plan?.bankroll?.liquid_currency) return { deployed: 0, reserve: 0, free: 100 }; const total = plan.bankroll.liquid_currency; return { deployed: Math.min(100, plan.deployed / total * 100), reserve: Math.min(100, plan.reserve / total * 100), free: Math.max(0, plan.unallocated / total * 100) } }, [plan])
 
   return <div className="terminal-page">
-    <div className="page-head"><div><div className="eyebrow">CAPITAL OFFICE / PLAN</div><h1>CFO</h1><p className="muted">PAPER is the safe default: ideas can be simulated, but DeusCFO never executes trades. Bankroll values are Divine.</p></div><div className="market-state"><span className="status-dot" /> MARKET STATE <strong>{plan ? (plan.positions?.length ? 'SELECTIVE' : 'QUIET') : 'UNASSESSED'}</strong></div></div>
+    <div className="page-head cfo-page-head"><div><div className="eyebrow">CAPITAL OFFICE / PLAN</div><h1>CFO</h1><p className="muted">PAPER is the safe default: ideas can be simulated, but DeusCFO never executes trades. Bankroll values are Divine.</p></div><div className="market-state"><span className="status-dot" /> MARKET STATE <strong>{plan ? (plan.positions?.length ? 'SELECTIVE' : 'QUIET') : 'UNASSESSED'}</strong></div><OracleLens /></div>
     <PlanForm {...{ selectedLeague, mode, setMode, hours, setHours, simulations, setSimulations, bankroll, updateBankroll, preferences, updatePreference, presets, applyPreset, advanced, setAdvanced, loading, runPlan, portfolioId, usePaperBankroll, setUsePaperBankroll }} />
     {loading && <LoadingState text="Evaluating validated opportunities…" />}{error && <ErrorState message={error} />}{plan && !loading && <PlanView plan={plan} allocation={allocation} expected={expected} probability={probability} portfolioId={portfolioId} addToPaper={addToPaper} />}{!plan && !loading && !error && <div className="terminal-panel empty-panel"><div className="eyebrow">NO PLAN RUN</div><p>Run PAPER after backfill to see exploratory Currency Exchange ideas alongside any validated capital positions.</p></div>}
     <PaperPortfolio {...{ bankroll, portfolioId, portfolio, portfolioLoading, portfolioError, createPortfolio, forgetPortfolio, realForm, setRealForm, recordReal, realMessage, trades, manualTrades, realizePosition, correctTrade, realizeMessage }} />

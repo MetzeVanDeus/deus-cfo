@@ -6,7 +6,6 @@ import { ExplorerTab } from './components/ExplorerTab'
 import { CFOTab } from './components/CFOTab'
 import { StrategiesTab } from './components/StrategiesTab'
 import { ProfitRoutesTab } from './components/ProfitRoutesTab'
-import { OracleLens } from './components/OracleLens'
 
 const TABS = [
   { id: 'cfo', label: 'CFO' },
@@ -65,7 +64,7 @@ function App() {
       <section className="terminal-panel league-panel" aria-labelledby="league-heading"><div><div className="eyebrow">SHARED MARKET CONTEXT</div><h2 id="league-heading">{migrationRequired ? 'League migration' : selectedLeague ? 'Active league' : 'First-run league'}</h2><p className="muted">The UI and collector intentionally use one local league setting. Choose a live league, then save it.</p></div><div className="league-controls"><select className="input" aria-label="Configured league" value={leagueDraft} onChange={(event) => setLeagueDraft(event.target.value)}><option value="">Choose a live league</option>{leagues.map((league) => <option key={league.id} value={league.id}>{league.name || league.text || league.id}</option>)}</select><button className="btn-primary" disabled={!liveLeague || savingLeague} onClick={saveLeague}>{savingLeague ? 'SAVING…' : 'SAVE LEAGUE'}</button></div>{leagueMessage && <p className="muted" role="status">{leagueMessage}</p>}</section>
       {selectedLeague && <ReadinessPanel league={selectedLeague} />}
       <div className="history-control"><label htmlFor="history-window">History window</label><select id="history-window" className="input" value={historyHours} onChange={(event) => setHistoryHours(Number(event.target.value))}><option value="24">24 hours</option><option value="72">72 hours</option><option value="168">7 days</option></select></div>
-      <ErrorBoundary key={activeTab}><div role="tabpanel">{activeTab === 'cfo' && <div className="cfo-stage"><OracleLens /><CFOTab selectedLeague={selectedLeague} /></div>}{activeTab === 'dashboard' && <DashboardTab categories={categories} selectedLeague={selectedLeague} historyHours={historyHours} />}{activeTab === 'signals' && <SignalsTab selectedLeague={selectedLeague} historyHours={historyHours} />}{activeTab === 'explorer' && <ExplorerTab categories={categories} selectedLeague={selectedLeague} historyHours={historyHours} />}{activeTab === 'strategies' && <StrategiesTab categories={categories} selectedLeague={selectedLeague} />}{activeTab === 'profit-routes' && <ProfitRoutesTab categories={categories} selectedLeague={selectedLeague} />}</div></ErrorBoundary>
+      <ErrorBoundary key={activeTab}><div role="tabpanel">{activeTab === 'cfo' && <div className="cfo-stage"><CFOTab selectedLeague={selectedLeague} /></div>}{activeTab === 'dashboard' && <DashboardTab categories={categories} selectedLeague={selectedLeague} historyHours={historyHours} />}{activeTab === 'signals' && <SignalsTab selectedLeague={selectedLeague} historyHours={historyHours} />}{activeTab === 'explorer' && <ExplorerTab categories={categories} selectedLeague={selectedLeague} historyHours={historyHours} />}{activeTab === 'strategies' && <StrategiesTab categories={categories} selectedLeague={selectedLeague} />}{activeTab === 'profit-routes' && <ProfitRoutesTab categories={categories} selectedLeague={selectedLeague} />}</div></ErrorBoundary>
     </main>
   </div>
 }
