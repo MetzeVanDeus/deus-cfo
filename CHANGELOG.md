@@ -1,6 +1,10 @@
 # Changelog
 ## Unreleased
 
+### Added
+
+- Added a single `VERSION` source, a GitHub Releases update check, `GET /api/update/status`, and a top-bar update badge with a footer refresh control.
+
 ## 0.4.0 — 2026-08-27
 
 ### Added

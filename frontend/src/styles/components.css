@@ -3,6 +3,8 @@
   position:relative;
   isolation:isolate;
   background:var(--bg);
+  display:flex;
+  flex-direction:column;
 }
 .app-shell::before {
   content:"";
@@ -113,12 +115,35 @@
   opacity:1;
   transform:scaleX(1);
 }
-.topbar-status {
+.topbar-end {
   margin-left:auto;
+  display:flex;
+  align-items:center;
+  gap:var(--sp-3);
+  min-width:0;
+}
+.topbar-status {
   white-space:nowrap;
   color:var(--muted);
   font-size:var(--fs-micro);
   letter-spacing:.08em;
+}
+.update-badge {
+  display:inline-flex;
+  align-items:center;
+  border:1px solid var(--brass);
+  background:rgb(182 151 90 / 12%);
+  color:var(--brass-bright);
+  height:24px;
+  padding:0 var(--sp-2);
+  font-size:var(--fs-micro);
+  letter-spacing:.06em;
+  text-decoration:none;
+  white-space:nowrap;
+}
+.update-badge:hover {
+  background:rgb(182 151 90 / 20%);
+  color:var(--text);
 }
 .status-dot {
   width:6px;
@@ -139,8 +164,10 @@
 }
 .main-shell {
   max-width:1440px;
+  width:100%;
   margin:0 auto;
   padding:var(--sp-5) var(--sp-5) var(--sp-6);
+  flex:1;
 }
 .terminal-page {
   max-width:1200px;
@@ -357,6 +384,12 @@ h3 {
   color:var(--muted);
   box-shadow:none;
   cursor:not-allowed;
+  transform:none;
+}
+a.btn-primary,a.btn-secondary {
+  display:inline-flex;
+  align-items:center;
+  text-decoration:none;
 }
 .decision {
   display:flex;
@@ -793,11 +826,38 @@ h3 {
   font-size:var(--fs-micro);
   letter-spacing:0;
   padding:var(--sp-4) var(--sp-5);
-  text-align:center;
+  display:flex;
+  justify-content:center;
+  align-items:center;
+  flex-wrap:wrap;
+  gap:var(--sp-1);
 }
 .footer span {
   margin:0 var(--sp-1);
   color:var(--line);
+}
+.footer .footer-copy {
+  color:var(--muted);
+}
+.update-modal-backdrop {
+  position:fixed;
+  inset:0;
+  z-index:40;
+  display:grid;
+  place-items:center;
+  padding:var(--sp-5);
+  background:rgb(0 0 0 / 55%);
+}
+.update-modal {
+  width:min(420px, 100%);
+  padding:var(--sp-5);
+  border:1px solid var(--line);
+  background:var(--surface);
+  box-shadow:0 16px 40px rgb(0 0 0 / 35%);
+}
+.update-modal h2 {
+  margin:var(--sp-1) 0 var(--sp-3);
+  font-size:var(--fs-panel);
 }
 .league-panel,.readiness-panel {
   display:grid;

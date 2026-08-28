@@ -48,6 +48,7 @@ def test_mutation_and_collection_require_session_token(client):
     assert client.post("/api/cx/poll", headers=headers).status_code == 403
     assert client.post("/api/cx/backfill", json={"max_hours": 1}, headers=headers).status_code == 403
     assert client.post("/api/snapshot", json={"league": "Allflame"}, headers=headers).status_code == 403
+    assert client.post("/api/update/check", headers=headers).status_code == 403
 
 
 def test_valid_session_allows_protected_collection(monkeypatch, client):

@@ -36,6 +36,8 @@ try {
     --add-data "$(Join-Path $Frontend 'dist');frontend/dist" `
     --add-data "$(Join-Path $Root 'backend/div_card_recipes.json');." `
     --add-data "$(Join-Path $Root 'backend/transformations.experimental.json');." `
+    --add-data "$(Join-Path $Root 'VERSION');." `
+    --hidden-import updates `
     (Join-Path $Stage "deuscfo.py")
   Assert-NativeSuccess "PyInstaller build"
 } finally {

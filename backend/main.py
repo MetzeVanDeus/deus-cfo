@@ -30,10 +30,11 @@ import cx_metadata
 import cx_queries
 import market_relationships
 import coverage
+import updates
 
 log = logging.getLogger("deuscfo.main")
 
-app = FastAPI(title="DeusCFO")
+app = FastAPI(title="DeusCFO", lifespan=updates.lifespan)
 
 ALLOWED_ORIGINS = frozenset({"http://127.0.0.1:3000", "http://localhost:3000"})
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
@@ -1394,6 +1395,19 @@ async def cx_history(league: str, item_id: str, hours: int = 24, ref: str = "aut
         for entry in sorted(by_hour.values(), key=lambda x: x["timestamp"])
     ]
     return result
+
+
+@app.get("/api/update/status")
+async def get_update_status():
+    """Return the cached GitHub latest-release check without blocking on the network."""
+    updates.schedule_refresh_if_needed()
+    return updates.current_status()
+
+
+@app.post("/api/update/check", dependencies=[Depends(require_local_session)])
+async def check_for_update():
+    """Force a GitHub latest-release refresh for the footer control."""
+    return await updates.refresh(force=True)
 
 
 @app.get("/api/coverage")

@@ -113,7 +113,7 @@ Every result carries evidence and coverage limits where available. Missing histo
 
 ## Privacy and policy
 
-DeusCFO binds to loopback by default. SQLite market history, journals, paper portfolios, logs, and local configuration remain on your machine. Review logs and free-form notes before sharing diagnostics; see [`docs/privacy.md`](docs/privacy.md).
+DeusCFO binds to loopback by default. SQLite market history, journals, paper portfolios, logs, and local configuration remain on your machine. Review logs and free-form notes before sharing diagnostics; see [`docs/privacy.md`](docs/privacy.md). Packaged builds know their `VERSION` and check GitHub's latest stable release in the background; a network failure is silent.
 
 **This product isn't affiliated with or endorsed by Grinding Gear Games in any way.** Path of Exile and related marks belong to Grinding Gear Games. DeusCFO does not automate gameplay or trade execution. Optional donations are pending GGG guidance and are not linked or feature-gated in this beta.
 
