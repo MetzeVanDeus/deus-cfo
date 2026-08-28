@@ -3,7 +3,7 @@
 
 ### Changed
 
-- Restored brass outlines on panels, cards, decision blocks, profit-route cards, and the update modal. Divider and field borders stay as they are.
+- Restored the pre-surface-pass outline color on panels, cards, decision blocks, profit-route cards, and the update modal. Divider and field borders stay as they are.
 
 ### Added
 
