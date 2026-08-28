@@ -1,13 +1,22 @@
 # Changelog
-## Unreleased
-
-### Changed
-
-- Restored the pre-surface-pass outline color on panels, cards, decision blocks, profit-route cards, and the update modal. Divider and field borders stay as they are.
+## 0.5.0 — 2026-08-28
 
 ### Added
 
 - Added a single `VERSION` source, a GitHub Releases update check, `GET /api/update/status`, and a top-bar update badge with a footer refresh control.
+- Added shared empty/loading/error state presentation and a clearer action hierarchy with primary, secondary, segmented, and disabled control treatments.
+
+### Changed
+
+- Reworked the frontend into a consistent dark-brass design system with centralized tokens, six-step typography and spacing scales, clearer sunken/standard/raised surfaces, stronger field boundaries, and system font stacks without bundled or remote font assets.
+- Split the frontend styling into Tailwind entry, token, base, and component stylesheets; removed duplicate purple/brass token vocabulary and mapped remaining legacy `dracula-*` utilities onto the brass palette pending component cleanup.
+- Moved the Oracle decoration into a dedicated CFO header grid column so it no longer overlaps market state or simulation controls.
+- Restored the pre-surface-pass outline color on panels, cards, decision blocks, profit-route cards, and the update modal while retaining the newer divider and field borders.
+- Packaged Windows builds now include `VERSION`, and CI/release verification requires `VERSION`, `frontend/package.json`, and tagged releases to agree.
+
+### Release
+
+- Bumped the application/frontend version to `0.5.0` for the design-system overhaul and GitHub Releases update-checking flow.
 
 ## 0.4.0 — 2026-08-27
 
@@ -24,7 +33,7 @@
 - Curated the existing Doctor → Headhunter definition with explicit manual verification and a direct definition source; no unsupported recipes or probabilistic rewards were added.
 - Added the Profit Routes budget/horizon controls and batch-plan display, including exact quantities, Chaos economics, effort/lock units, constraints, expected outcomes, and safe manual search links.
 - Preserved validated Path of Exile trade-search URLs with collected execution quotes so the planner can surface them without submitting searches, sending whispers, or executing game input.
-- Allowed deterministic unique rewards without buyer bids to use a conservative haircut sell-listing floor for manual batch planning; buyer-side executable depth and sell-listing evidence remain explicitly distinguishable in route outputs, batch plans, reasons, and verification metadata.
+- Allowed deterministic unique rewards without buyer bids to use a conservative haircut sell-listing floor for manual batch planning; buyer-side executable depth and sell-listing evidence remain explicitly distinguishishable in route outputs, batch plans, reasons, and verification metadata.
 
 ### Fixed
 
@@ -78,54 +87,3 @@
 - Flip requests now require a non-empty league and a finite positive budget, and flip responses validate against an explicit API model.
 - Normalized nullable or malformed poe.ninja fields before returning flip results, including names, icons, variants, numeric values, and nullable sparkline samples.
 - Improved frontend error messaging and retry behavior, preserving the paper-portfolio link across transient failures and clearing it only when the server reports not found.
-- Preserved native table-row semantics with explicit keyboard-accessible detail toggles for expandable position and signal rows, and labeled flip scores with their `/100` scale.
-- Replaced the remote Google Fonts dependency with the local system font stack, removed the lone Explorer emoji, corrected timestamp formatting, and reduced visual noise in dense lists and charts.
-
-### Fixed
-
-- Prevented CX backfill and polling cursors from advancing when league discovery is empty, a wanted league is absent from the returned hour, or no valid wanted-league records can be stored.
-- Prevented invalid and non-finite flip budgets from silently returning empty candidate lists.
-- Prevented malformed nullable market payloads from failing the explicit flip response contract.
-- Kept boot metadata failures independent so one successful request cannot hide another startup error.
-- Recovered malformed persisted CFO bankroll and preference settings by discarding invalid local values and using safe defaults.
-- Kept selected history-period labels accurate in Explorer statistics and separated missing-field from invalid-budget messages.
-- Used a zero Divine-rate fallback when trade-depth rate resolution is unavailable.
-- Removed unused capital/opportunity compatibility aliases and kept backend tests runnable from both repository-root and backend working directories.
-- Preserved first and final valid price samples and filtered invalid prices before Explorer chart calculations.
-
-### Security
-
-- Documented the process-lifetime loopback session-token threat model: any local process able to access the loopback service can read the token, so untrusted local software must not run alongside DeusCFO.
-- Disabled persisted checkout credentials in CI and release jobs; release publishing continues to use its explicit `GH_TOKEN`.
-
-### Quality
-
-- Added backend regression coverage for shared category/type and slug contracts, HTTP client reuse, Divine-rate fallback, FlipRequest and nullable FlipResult contracts, and CX cursor safety.
-- Added root-compatible pytest configuration so the backend suite can run from the repository root or backend working directory.
-
-## 0.1.4 — 2026-08-23
-
-- Enabled CodeQL analysis for Python, JavaScript/TypeScript, and GitHub Actions, then resolved all three initial path-handling alerts.
-- Routed packaged frontend assets through Starlette's traversal-safe static file handler with regression coverage.
-- Removed the internal release-readiness audit from the published source tree.
-
-## 0.1.3 — 2026-08-23
-
-- Added explicit packaged Windows download verification and native Windows/Linux source-run instructions.
-- Fixed Linux launcher npm resolution and documented the Debian/Ubuntu virtual-environment prerequisite.
-
-## 0.1.2 — 2026-08-23
-
-- Redesigned the terminal visual layer with a brass-led command spine, regime rail, signal choreography, and a reduced-motion-aware Three.js oracle lens.
-- Defaulted CFO planning to safe PAPER mode and added low-confidence Currency Exchange mean-reversion watches from direct hourly quotes.
-- Kept exploratory paper ideas separate from validated capital positions, with explicit data freshness, liquidity, and evidence warnings.
-
-## 0.1.1 — 2026-08-23
-
-- Added loopback production serving and an explicit Vite development launcher.
-- Added shared local league configuration and migration guidance in the UI.
-- Added local session-token consumption for state-changing frontend requests.
-- Added data-readiness and Currency Exchange backfill guidance.
-- Documented conservative Doctor → Headhunter-only production route coverage.
-- Added Windows packaging script and SHA-256 artifact generation path.
-- Added provenance, privacy, contribution, security, issue, and release documentation.
