@@ -1076,7 +1076,7 @@ h3 {
   position:relative;
   width:156px;
   height:156px;
-  margin-bottom:-var(--sp-6);
+  margin-bottom:calc(-1 * var(--sp-6));
   opacity:.62;
   transform:scale(.8);
   transform-origin:top right;
