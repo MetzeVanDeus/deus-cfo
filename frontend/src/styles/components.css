@@ -936,7 +936,7 @@ a.btn-primary,a.btn-secondary {
   outline-offset:2px;
 }
 .decision-deploy {
-  box-shadow:0 0 22px rgb(121 201 154 / 8%);
+  box-shadow:0 0 22px rgb(121 201 154 / 8%), inset 0 0 0 1px rgb(225 196 126 / 18%);
 }
 .decision-deploy .decision-word {
   text-shadow:0 0 18px rgb(121 201 154 / 18%);

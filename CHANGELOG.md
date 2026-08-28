@@ -3,7 +3,7 @@
 
 ### Changed
 
-- Restored brass outlines on panels, cards, decision blocks, and the update modal. Divider and field borders stay as they are.
+- Restored brass outlines on panels, cards, decision blocks, profit-route cards, and the update modal. Divider and field borders stay as they are.
 
 ### Added
 
