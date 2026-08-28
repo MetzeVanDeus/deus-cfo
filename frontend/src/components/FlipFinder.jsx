@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { api } from '../lib/helpers'
-import { EmptyState } from './ui'
+import { EmptyState, ErrorState } from './ui'
 
 export function FlipFinder({ categories, selectedLeague }) {
   const [selectedCategory, setSelectedCategory] = useState('Currency')
@@ -97,11 +97,7 @@ export function FlipFinder({ categories, selectedLeague }) {
           </div>
         </div>
 
-        {error && (
-          <div className="mt-4 p-3 bg-dracula-red/20 border border-dracula-red/50 rounded-lg text-dracula-red text-sm">
-            {error}
-          </div>
-        )}
+        {error && <ErrorState message={error} />}
       </section>
 
       {/* Results */}
