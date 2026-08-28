@@ -298,6 +298,7 @@ def test_fetch_latest_release_maps_connect_failure(monkeypatch):
 
 
 def test_verify_release_version_script_accepts_repo_and_rejects_mismatched_tag():
+    expected_version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
     ok = subprocess.run(
         [sys.executable, str(ROOT / "scripts" / "verify_release_version.py")],
         cwd=ROOT,
@@ -306,7 +307,7 @@ def test_verify_release_version_script_accepts_repo_and_rejects_mismatched_tag()
         check=False,
     )
     assert ok.returncode == 0, ok.stderr
-    assert "0.5.0" in ok.stdout
+    assert expected_version in ok.stdout
     mismatch = subprocess.run(
         [sys.executable, str(ROOT / "scripts" / "verify_release_version.py"), "v9.9.9"],
         cwd=ROOT,

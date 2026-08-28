@@ -68,6 +68,9 @@ jobs:
           if (-not (Test-Path dist/DeusCFO/SHA256SUMS.txt)) { throw "Packaged checksum is missing" }
           $versionFile = @('dist/DeusCFO/_internal/VERSION', 'dist/DeusCFO/VERSION') | Where-Object { Test-Path $_ } | Select-Object -First 1
           if (-not $versionFile) { throw "Packaged VERSION is missing" }
+          $sourceVersion = (Get-Content VERSION -Raw).Trim()
+          $packagedVersion = (Get-Content $versionFile -Raw).Trim()
+          if ($packagedVersion -ne $sourceVersion) { throw "Packaged VERSION does not match VERSION" }
 
   frontend:
     name: Frontend build
