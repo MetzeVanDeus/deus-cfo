@@ -64,6 +64,34 @@ def test_valid_session_allows_protected_collection(monkeypatch, client):
     assert response.status_code == 200
     assert response.json() == {"entries_stored": 0}
 
+def test_backfill_starts_without_waiting_for_worker(monkeypatch, client):
+    calls = []
+
+    async def start(max_hours):
+        calls.append(max_hours)
+        return {"status": "started", "hours_requested": max_hours, "hours_processed": 0}
+
+    monkeypatch.setattr(main.cx_collector, "start_backfill", start)
+    session = client.get("/api/session", headers=local_headers()).json()["token"]
+    response = client.post(
+        "/api/cx/backfill",
+        json={"max_hours": 2},
+        headers={**local_headers(), "X-DeusCFO-Token": session},
+    )
+    assert response.status_code == 202
+    assert response.json() == {"status": "started", "hours_requested": 2, "hours_processed": 0}
+    assert calls == [2]
+
+
+def test_backfill_rejects_unbounded_hours(client):
+    session = client.get("/api/session", headers=local_headers()).json()["token"]
+    response = client.post(
+        "/api/cx/backfill",
+        json={"max_hours": 0},
+        headers={**local_headers(), "X-DeusCFO-Token": session},
+    )
+    assert response.status_code == 422
+
 def test_config_reports_migration_and_persists_valid_league(monkeypatch, tmp_path, client):
     monkeypatch.setattr(main, "CONFIG_PATH", tmp_path / "deuscfo.config.json")
 

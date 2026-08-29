@@ -51,17 +51,20 @@ def test_backfill_processes_hours_and_advances(monkeypatch):
     assert progress == [2]
 
 
-def test_backfill_starts_at_requested_recent_window(monkeypatch):
+def test_backfill_starts_at_requested_recent_window_without_saved_cursor(monkeypatch):
     progress, _ = _install(monkeypatch, [{"market": 1}], stored=1)
     fetched = []
+
+    async def get_progress(_key):
+        return None
 
     async def fetch(change_id):
         fetched.append(change_id)
         return {"next_change_id": change_id + 3600, "markets": [{"league": "Allflame"}]}
 
+    monkeypatch.setattr(cx_collector.database, "get_cx_progress", get_progress)
     monkeypatch.setattr(cx_collector, "_hour_cursor", lambda hours_ago=0: 10_000 - hours_ago * 3600)
     monkeypatch.setattr(cx_collector, "fetch_currency_exchange", fetch)
-
     assert asyncio.run(cx_collector.backfill_currency_exchange(max_hours=1)) == 1
     assert fetched == [6400]
     assert progress == [10_000]
@@ -101,10 +104,11 @@ def test_poll_retries_wanted_empty_hour_without_advancing(monkeypatch):
     assert asyncio.run(cx_collector.poll_latest_cx()) == 0
     assert progress == []
 
-def test_backfill_does_not_advance_when_league_discovery_is_empty(monkeypatch):
+def test_backfill_fails_when_league_discovery_is_empty(monkeypatch):
     progress, _ = _install(monkeypatch, [{"market": 1}], stored=1)
     monkeypatch.setattr(cx_collector, "_fetch_leagues", lambda: asyncio.sleep(0, result=set()))
-    assert asyncio.run(cx_collector.backfill_currency_exchange(max_hours=1)) == 0
+    assert asyncio.run(cx_collector._run_backfill(max_hours=1)) == 0
+    assert cx_collector.backfill_status()["backfill_status"] == "failed"
     assert progress == []
 
 
@@ -147,6 +151,10 @@ def test_poll_stores_cursor_metadata(monkeypatch):
 
 def test_backfill_stores_first_change_id(monkeypatch):
     progress, set_calls = _install(monkeypatch, [{"market": 1}], stored=1)
+    async def get_progress(_key):
+        return None
+
+    monkeypatch.setattr(cx_collector.database, "get_cx_progress", get_progress)
     monkeypatch.setattr(cx_collector, "_hour_cursor", lambda _hours_ago=0: 1)
     asyncio.run(cx_collector.backfill_currency_exchange(max_hours=1))
     assert progress == [2]
@@ -196,3 +204,65 @@ def test_poll_does_not_advance_on_malformed_payload(monkeypatch):
 
     assert asyncio.run(cx_collector.poll_latest_cx()) == 0
     assert progress == []
+
+def test_backfill_uses_saved_cursor_when_available(monkeypatch):
+    progress, set_calls = _install(monkeypatch, [{"market": 1}], stored=1)
+    fetched = []
+
+    async def fetch(change_id):
+        fetched.append(change_id)
+        return {"next_change_id": change_id + 1, "markets": [{"league": "Allflame"}]}
+
+    monkeypatch.setattr(cx_collector, "fetch_currency_exchange", fetch)
+    monkeypatch.setattr(cx_collector, "REQUEST_DELAY", 0)
+    assert asyncio.run(cx_collector.backfill_currency_exchange(max_hours=1)) == 1
+    assert fetched == [1]
+    assert progress == [2]
+    assert set_calls[0]["first_change_id"] is None
+    assert set_calls[0]["first_available_hour"] is None
+
+
+
+
+def test_start_backfill_prevents_duplicate_workers(monkeypatch):
+    async def fake_backfill(max_hours):
+        await asyncio.sleep(0)
+        return max_hours
+
+    monkeypatch.setattr(cx_collector, "backfill_currency_exchange", fake_backfill)
+
+    async def run():
+        first = await cx_collector.start_backfill(max_hours=3)
+        second = await cx_collector.start_backfill(max_hours=3)
+        assert first == {"status": "started", "hours_requested": 3, "hours_processed": 0}
+        assert second == {"status": "in_progress", "hours_requested": 3, "hours_processed": 0}
+        await cx_collector._backfill_task
+        assert cx_collector.backfill_status() == {
+            "backfill_status": "completed",
+            "backfill_hours_requested": 3,
+            "backfill_hours_processed": 3,
+        }
+
+    asyncio.run(run())
+def test_backfill_worker_reports_fetch_failure(monkeypatch):
+    async def leagues():
+        return {"Allflame"}
+
+    async def get_progress(_key):
+        return 1
+
+    async def fetch(_change_id):
+        raise RuntimeError("upstream unavailable")
+
+    monkeypatch.setattr(cx_collector, "_fetch_leagues", leagues)
+    monkeypatch.setattr(cx_collector.database, "get_cx_progress", get_progress)
+    monkeypatch.setattr(cx_collector, "fetch_currency_exchange", fetch)
+
+    async def run():
+        result = await cx_collector.start_backfill(max_hours=1)
+        assert result["status"] == "started"
+        await cx_collector._backfill_task
+        assert cx_collector.backfill_status()["backfill_status"] == "failed"
+
+    asyncio.run(run())
+

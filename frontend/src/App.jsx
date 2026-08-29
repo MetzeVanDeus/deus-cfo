@@ -126,30 +126,57 @@ function ReadinessPanel({ league }) {
   const [backfilling, setBackfilling] = useState(false)
   const [message, setMessage] = useState('')
   const [loadError, setLoadError] = useState('')
+  const [backfillState, setBackfillState] = useState(null)
   useEffect(() => {
     let cancelled = false
     setLoading(true); setMessage(''); setLoadError('')
-    Promise.all([api.get('/coverage', { params: { league } }), api.get('/snapshot/status')]).then(([coverageResponse, statusResponse]) => {
-      if (!cancelled) { setCoverage(Array.isArray(coverageResponse.data) ? coverageResponse.data : []); setStatus(statusResponse.data) }
+    Promise.all([api.get('/coverage', { params: { league } }), api.get('/snapshot/status'), api.get('/cx/status')]).then(([coverageResponse, statusResponse, cxResponse]) => {
+      if (!cancelled) { setCoverage(Array.isArray(coverageResponse.data) ? coverageResponse.data : []); setStatus(statusResponse.data); setBackfillState(cxResponse.data) }
     }).catch(() => { if (!cancelled) setLoadError('Readiness data is unavailable; collection may still be starting.') }).finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
   }, [league])
+  useEffect(() => {
+    if (backfillState?.backfill_status !== 'running') return
+    let cancelled = false
+    let timer
+    const poll = async () => {
+      try {
+        const { data } = await api.get('/cx/status')
+        if (cancelled) return
+        if (data?.backfill_status === 'running') {
+          setBackfillState(data)
+          timer = setTimeout(poll, 1000)
+          return
+        }
+        const response = await api.get('/coverage', { params: { league } })
+        if (cancelled) return
+        setBackfillState(data)
+        setCoverage(Array.isArray(response.data) ? response.data : [])
+        setMessage(data?.backfill_status === 'failed'
+          ? 'Currency Exchange backfill failed; retry when the upstream is available.'
+          : `Currency Exchange backfill processed ${data?.backfill_hours_processed ?? 0} hours; exchange history is stored.`)
+      } catch {
+        if (!cancelled) timer = setTimeout(poll, 2000)
+      }
+    }
+    timer = setTimeout(poll, 1000)
+    return () => { cancelled = true; clearTimeout(timer) }
+  }, [backfillState?.backfill_status, league])
   const backfill = async () => {
-    setBackfilling(true); setMessage('Currency Exchange backfill started; this can take a few minutes and remains local.')
+    setBackfilling(true); setMessage('Currency Exchange backfill started in the background; this can take a few minutes and remains local.')
     try {
       const { data } = await api.post('/cx/backfill', { max_hours: 168 })
+      setBackfillState((current) => ({ ...current, ...data, backfill_status: data?.status === 'in_progress' || data?.status === 'started' ? 'running' : data?.status }))
+      if (data?.status === 'in_progress') setMessage('Currency Exchange backfill is already running in the background.')
       const response = await api.get('/coverage', { params: { league } })
-      const nextCoverage = Array.isArray(response.data) ? response.data : []
-      const exchangeHours = Number(nextCoverage.find((row) => row.category === 'Currency Exchange')?.hours_present || 0)
-      setCoverage(nextCoverage)
-      setMessage(`Currency Exchange backfill processed ${data?.hours_processed ?? 0} hours; ${exchangeHours} exchange hours are stored. Signals use live snapshots collected while DeusCFO runs.`)
+      setCoverage(Array.isArray(response.data) ? response.data : [])
     } catch (error) { setMessage(error.response?.data?.detail || 'Currency Exchange backfill could not start') }
     finally { setBackfilling(false) }
   }
   const snapshotHours = coverage.filter((row) => row.source === 'poe.ninja').reduce((max, row) => Math.max(max, Number(row.hours_present || 0)), 0)
   const exchangeHours = Number(coverage.find((row) => row.category === 'Currency Exchange')?.hours_present || 0)
   const waiting = snapshotHours < 24
-  return <section className="terminal-panel readiness-panel" aria-labelledby="readiness-heading"><div className="panel-title"><h2 id="readiness-heading">Data readiness</h2><span>{loading ? 'CHECKING…' : waiting ? 'WAIT' : `${snapshotHours} snapshot hours · ${exchangeHours} exchange hours`}</span></div>{loading ? <LoadingState text={`Checking stored history for ${league}…`} /> : loadError ? <ErrorState message={loadError} /> : <><p className="muted">{waiting ? 'WAIT is the honest state until enough snapshot hours exist for signals. Counts below are stored history, not a live-healthy monitor.' : 'Signals use poe.ninja snapshots collected while DeusCFO runs. The backfill below only adds official Currency Exchange history used by exchange-aware routes.'}</p><div className="metric-grid"><div className="metric"><span>Readiness</span><strong>{waiting ? 'WAIT' : 'READY'}</strong></div><div className="metric"><span>Snapshot rows</span><strong>{status?.total_rows?.toLocaleString?.() || '0'}</strong></div><div className="metric"><span>Signal snapshot hours</span><strong>{snapshotHours}</strong></div><div className="metric"><span>Exchange history hours</span><strong>{exchangeHours}</strong></div><div className="metric"><span>Last snapshot</span><strong>{status?.last_snapshot_per_league?.[league] ? new Date(status.last_snapshot_per_league[league]).toLocaleString() : 'Not yet'}</strong></div></div><button className="btn-secondary" type="button" disabled={backfilling} onClick={backfill}>{backfilling ? 'BACKFILLING…' : 'BACKFILL CURRENCY EXCHANGE HISTORY'}</button>{message && <p className="paper-note">{message}</p>}</>}</section>
+  return <section className="terminal-panel readiness-panel" aria-labelledby="readiness-heading"><div className="panel-title"><h2 id="readiness-heading">Data readiness</h2><span>{loading ? 'CHECKING…' : waiting ? 'WAIT' : `${snapshotHours} snapshot hours · ${exchangeHours} exchange hours`}</span></div>{loading ? <LoadingState text={`Checking stored history for ${league}…`} /> : loadError ? <ErrorState message={loadError} /> : <><p className="muted">{waiting ? 'WAIT is the honest state until enough snapshot hours exist for signals. Counts below are stored history, not a live-healthy monitor.' : 'Signals use poe.ninja snapshots collected while DeusCFO runs. The backfill below only adds official Currency Exchange history used by exchange-aware routes.'}</p><div className="metric-grid"><div className="metric"><span>Readiness</span><strong>{waiting ? 'WAIT' : 'READY'}</strong></div><div className="metric"><span>Snapshot rows</span><strong>{status?.total_rows?.toLocaleString?.() || '0'}</strong></div><div className="metric"><span>Signal snapshot hours</span><strong>{snapshotHours}</strong></div><div className="metric"><span>Exchange history hours</span><strong>{exchangeHours}</strong></div><div className="metric"><span>Last snapshot</span><strong>{status?.last_snapshot_per_league?.[league] ? new Date(status.last_snapshot_per_league[league]).toLocaleString() : 'Not yet'}</strong></div></div><button className="btn-secondary" type="button" disabled={backfilling || backfillState?.backfill_status === 'running'} onClick={backfill}>{backfilling || backfillState?.backfill_status === 'running' ? 'BACKFILL RUNNING…' : 'BACKFILL CURRENCY EXCHANGE HISTORY'}</button>{message && <p className="paper-note">{message}</p>}</>}</section>
 }
 
 export default App

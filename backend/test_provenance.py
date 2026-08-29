@@ -192,6 +192,29 @@ def test_cx_cursor_metadata_roundtrip(tmp_path, monkeypatch):
     asyncio.run(run())
 
 
+def test_cx_cursor_rejects_older_updates_but_fills_first_metadata(tmp_path, monkeypatch):
+    _setup_db(tmp_path, monkeypatch)
+
+    async def run():
+        await database.set_cx_progress(
+            "default", 200,
+            last_synced_hour="2026-01-03T00:00:00+00:00",
+        )
+        await database.set_cx_progress(
+            "default", 100,
+            first_change_id=50,
+            first_available_hour="2026-01-01T00:00:00+00:00",
+            last_synced_hour="2026-01-02T00:00:00+00:00",
+        )
+        cursor = await database.get_cx_cursor("default")
+        assert cursor["last_change_id"] == 200
+        assert cursor["last_synced_hour"] == "2026-01-03T00:00:00+00:00"
+        assert cursor["first_change_id"] == 50
+        assert cursor["first_available_hour"] == "2026-01-01T00:00:00+00:00"
+
+    asyncio.run(run())
+
+
 # ---------------------------------------------------------------------------
 # coverage
 # ---------------------------------------------------------------------------
