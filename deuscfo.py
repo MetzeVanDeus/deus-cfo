@@ -183,12 +183,11 @@ def _backend_runtime_token(url, expected_version, timeout=1):
 
 def _listener_occupied(url):
     port = urllib.parse.urlsplit(url).port
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-        try:
-            probe.bind(("127.0.0.1", port))
-        except OSError:
-            return True
-    return False
+    try:
+        with socket.create_server(("127.0.0.1", port)):
+            return False
+    except OSError:
+        return True
 
 
 def _ready(url, pid=None, timeout=1, expected_version=None, expected_token=None):
