@@ -90,7 +90,7 @@ export function FlipFinder({ categories, selectedLeague }) {
           </div>
 
           <div className="flex items-end">
-            <button onClick={handleSearch} disabled={loading}
+            <button onClick={handleSearch} disabled={loading || !selectedLeague}
               className="btn-primary w-full disabled:opacity-50 disabled:cursor-not-allowed">
               {loading ? 'Searching...' : 'Find Flips'}
             </button>

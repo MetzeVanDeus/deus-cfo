@@ -1,6 +1,13 @@
 # Changelog
 ## Unreleased
 
+### Fixed
+
+- Enabled SAVE LEAGUE from a live draft on first run and league migration instead of gating it on the already-saved league.
+- Stopped Dashboard and Signals from spinning when no league is saved, and disabled Find Flips until a league exists.
+- Interpolated the Dashboard history-window metric label and rendered Profit Routes API errors with retry.
+- Removed the doubled Explorer price-change sign and stopped painting the topbar status dot as healthy when no league is configured.
+
 ## 0.5.0 — 2026-08-29
 
 ### Added

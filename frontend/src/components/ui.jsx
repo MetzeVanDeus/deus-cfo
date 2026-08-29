@@ -1,4 +1,4 @@
-import { signalColor } from '../lib/helpers'
+import { LEAGUE_EMPTY_MESSAGE, LEAGUE_EMPTY_TITLE, signalColor } from '../lib/helpers'
 
 export function SignalBadge({ type }) {
   const color = signalColor(type)
@@ -22,3 +22,4 @@ export function StateBlock({ kind = 'empty', eyebrow, title, message, action, co
 export function LoadingState({ text = 'Loading...' }) { return <StateBlock kind="loading" eyebrow="WORKING" title={text} /> }
 export function EmptyState({ eyebrow = 'NO DATA', title, message, action, compact = false }) { return <StateBlock kind="empty" eyebrow={eyebrow} title={title} message={message} action={action} compact={compact} /> }
 export function ErrorState({ message, onRetry }) { return <StateBlock kind="error" eyebrow="ERROR" title="Unable to load" message={message} action={onRetry && <button className="text-button" onClick={onRetry}>RETRY</button>} /> }
+export function LeagueEmpty() { return <EmptyState title={LEAGUE_EMPTY_TITLE} message={LEAGUE_EMPTY_MESSAGE} /> }

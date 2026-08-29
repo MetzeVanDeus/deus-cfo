@@ -155,6 +155,14 @@
   vertical-align:1px;
   box-shadow:0 0 8px rgb(121 201 154 / 55%);
 }
+.status-dot-warning {
+  background:var(--warning);
+  box-shadow:0 0 8px rgb(215 170 97 / 55%);
+}
+.status-dot-negative {
+  background:var(--negative);
+  box-shadow:0 0 8px rgb(216 135 134 / 55%);
+}
 .boot-warning {
   padding:var(--sp-2) var(--sp-5);
   color:var(--warning);
@@ -969,7 +977,7 @@ a.btn-primary,a.btn-secondary {
     padding:0 var(--sp-3);
     gap:var(--sp-3);
   }
-  .brand-context,.brand-divider,.topbar-status {
+  .brand-context,.brand-divider {
     display:none;
   }
   .topnav {

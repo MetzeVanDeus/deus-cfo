@@ -71,7 +71,20 @@ export const fmtVol = (v) => {
   return v.toFixed(0)
 }
 
-export const fmtPct = (v) => (v != null ? `${v > 0 ? '+' : ''}${v.toFixed(1)}%` : '—')
+export const fmtPct = (v) => (v != null ? `${v > 0 ? '+' : ''}${Number(v).toFixed(1)}%` : '—')
+
+export const historyWindowLabel = (hours) => Number(hours) === 168 ? '7d' : `${hours}h`
+
+export const isDraftLeagueLive = (leagues, draft) => Boolean(draft) && Array.isArray(leagues) && leagues.some((league) => league.id === draft)
+
+export const leagueStatusTone = ({ selectedLeague = '', migrationRequired = false, bootError = false } = {}) => {
+  if (bootError) return 'negative'
+  if (!selectedLeague || migrationRequired) return 'warning'
+  return 'positive'
+}
+
+export const LEAGUE_EMPTY_TITLE = 'Select a league'
+export const LEAGUE_EMPTY_MESSAGE = 'Save a live league in Shared market context before this view requests market data.'
 
 export const fmtTime = (iso) => {
   if (!iso) return '—'
