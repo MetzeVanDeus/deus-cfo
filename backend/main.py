@@ -578,7 +578,7 @@ class CapitalPlanRequest(BaseModel):
     portfolio_id: int | None = None
     preferences: capital.InvestmentPreferences = Field(default_factory=capital.InvestmentPreferences)
     mode: capital.Mode = "PAPER"
-    hours: float = 24
+    hours: float = 168
     seed: int = 0
     simulations: int = 2000
 

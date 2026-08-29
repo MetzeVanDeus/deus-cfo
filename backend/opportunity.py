@@ -240,11 +240,11 @@ def normalize_opportunity(
 
 # --- Factory functions ---
 
-async def regime_to_opportunity(regime_data: dict, league: str) -> Opportunity:
+async def regime_to_opportunity(regime_data: dict, league: str, hours: float = 24) -> Opportunity:
     """Convert a regime detection dict into an Opportunity."""
     # Fetch historical context for this item
     stats = await market_data.get_rolling_stats(
-        league, regime_data["category"], regime_data["item_id"], 24
+        league, regime_data["category"], regime_data["item_id"], hours
     )
     historical_context = {
         "median_price": stats.get("median"),
@@ -277,10 +277,10 @@ async def regime_to_opportunity(regime_data: dict, league: str) -> Opportunity:
     return await score_opportunity(opp, regime_data)
 
 
-async def anomaly_to_opportunity(anomaly_data: dict, league: str) -> Opportunity:
+async def anomaly_to_opportunity(anomaly_data: dict, league: str, hours: float = 24) -> Opportunity:
     """Convert an anomaly detection dict into an Opportunity."""
     stats = await market_data.get_rolling_stats(
-        league, anomaly_data["category"], anomaly_data["item_id"], 24
+        league, anomaly_data["category"], anomaly_data["item_id"], hours
     )
     historical_context = {
         "median_price": stats.get("median"),
@@ -320,7 +320,7 @@ async def anomaly_to_opportunity(anomaly_data: dict, league: str) -> Opportunity
     return await score_opportunity(opp, anomaly_data)
 
 
-async def signal_to_opportunity(signal_data: dict, league: str) -> Opportunity:
+async def signal_to_opportunity(signal_data: dict, league: str, hours: float = 24) -> Opportunity:
     """Convert a signal feed dict into an Opportunity."""
     # Signal source determines the detector type and underlying data
     source = signal_data.get("source", "regime")
@@ -330,7 +330,7 @@ async def signal_to_opportunity(signal_data: dict, league: str) -> Opportunity:
     category = signal_data.get("category", "")
     historical_context = {}
     if item_id and category:
-        stats = await market_data.get_rolling_stats(league, category, item_id, 24)
+        stats = await market_data.get_rolling_stats(league, category, item_id, hours)
         historical_context = {
             "median_price": stats.get("median"),
             "percentile_rank": stats.get("percentile_rank"),
@@ -561,11 +561,11 @@ async def get_all_opportunities(
         for regime in await regime_mod.detect_all_regimes(league, category, hours):
             if regime["regime"] in ("Stable", "Unknown"):
                 continue
-            opportunities.append(await regime_to_opportunity(regime, league))
+            opportunities.append(await regime_to_opportunity(regime, league, hours))
 
         # Anomalies → opportunities
         for anom in await anomaly_mod.detect_anomalies(league, category, hours):
-            opportunities.append(await anomaly_to_opportunity(anom, league))
+            opportunities.append(await anomaly_to_opportunity(anom, league, hours))
 
     await _attach_historical_outcomes(opportunities, include_feedback=include_feedback)
     latest = {

@@ -117,6 +117,74 @@ def test_opportunity_filter_rejects_thin_market_and_requires_empirical_fields():
     assert normalized.rejection_reason == "liquidity_below_threshold"
 
 
+def test_opportunity_factories_use_requested_analysis_window(monkeypatch):
+    latest = {
+        "Currency": [
+            {"category": "Currency", "item_id": item, "item_name": item,
+             "price_chaos": 100, "volume": 100}
+            for item in ("regime-item", "anomaly-item")
+        ]
+    }
+    calls = []
+
+    async def get_all_latest(_league):
+        return latest
+
+    async def get_rolling_stats(_league, _category, _item_id, hours):
+        calls.append(hours)
+        return {
+            "median": 100, "min": 90, "max": 110, "percentile_rank": .5,
+            "volume_median": 100, "count": 14 if hours == 168 else 1,
+        }
+
+    async def detect_regimes(_league, _category, _hours):
+        return [{
+            "regime": "Trending Up", "category": "Currency", "item_id": "regime-item",
+            "confidence": .8, "signals": {}, "explanation": "",
+        }]
+
+    async def detect_anomalies(_league, _category, _hours):
+        return [{
+            "anomaly_type": "price_spike", "category": "Currency", "item_id": "anomaly-item",
+            "item_name": "anomaly-item", "severity": .8, "z_score": 3,
+            "percentile": 1, "volume_multiplier": 1, "price_current": 100,
+            "price_median": 90, "explanation": "",
+        }]
+
+    async def attach_outcomes(opportunities, *, include_feedback=True):
+        for item in opportunities:
+            item.expected_return = 10
+            item.win_probability = .8
+            item.downside_percentile = -2
+            item.sample_size = 5
+            item.historical_confidence = .5
+            item.historical_context["return_samples"] = [10] * 5
+            item.historical_context["duration_samples"] = [24] * 5
+
+    monkeypatch.setattr(opportunity.market_data, "get_all_latest", get_all_latest)
+    monkeypatch.setattr(opportunity.market_data, "get_rolling_stats", get_rolling_stats)
+    monkeypatch.setattr(opportunity.regime_mod, "detect_all_regimes", detect_regimes)
+    monkeypatch.setattr(opportunity.anomaly_mod, "detect_anomalies", detect_anomalies)
+    monkeypatch.setattr(opportunity, "_attach_historical_outcomes", attach_outcomes)
+
+    async def run():
+        detected = await opportunity.get_all_opportunities("Test", 168, include_feedback=False)
+        signal = await opportunity.signal_to_opportunity({
+            "source": "regime", "type": "Trending Up", "item": "signal-item",
+            "category": "Currency", "confidence": .8,
+        }, "Test", 168)
+        return detected, signal
+
+    detected, signal = asyncio.run(run())
+    eligible, rejected = opportunity.filter_opportunities(detected)
+
+    assert calls == [168, 168, 168]
+    assert len(eligible) == 2
+    assert rejected == {}
+    assert all(item.historical_context["data_points"] == 14 for item in detected)
+    assert signal.historical_context["data_points"] == 14
+
+
 def test_execution_fields_apply_slippage_and_keep_heuristic_separate():
     from opportunity import Opportunity, _attach_execution_fields
 

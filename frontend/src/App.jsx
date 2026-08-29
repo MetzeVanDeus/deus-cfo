@@ -270,9 +270,9 @@ function ReadinessPanel({ league }) {
     {loading ? <LoadingState text={`Checking stored history for ${league}…`} /> : loadError ? <ErrorState message={loadError} /> : <>
       <p className="muted">{waiting
         ? 'Loading real historical poe.ninja observations. Signals become available after five time-separated samples.'
-        : 'Signals use real stored observations. Imported daily history makes the most liquid items useful immediately; live snapshots continue expanding coverage.'}</p>
+        : 'Signals use real stored observations. Imported daily history makes the most liquid items useful immediately; live snapshots continue expanding coverage. Capital planning applies stricter evidence gates and may correctly remain at WAIT.'}</p>
       <div className="metric-grid">
-        <div className="metric"><span>Readiness</span><strong>{waiting ? 'WAIT' : 'READY'}</strong></div>
+        <div className="metric"><span>Signal readiness</span><strong>{waiting ? 'SIGNALS WAITING' : 'SIGNALS READY'}</strong></div>
         <div className="metric"><span>Snapshot rows</span><strong>{status?.total_rows?.toLocaleString?.() || '0'}</strong></div>
         <div className="metric"><span>Signal samples</span><strong>{snapshotSamples}</strong></div>
         <div className="metric"><span>Exchange history hours</span><strong>{exchangeHours}</strong></div>

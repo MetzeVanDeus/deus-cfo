@@ -1,6 +1,19 @@
 # Changelog
 ## Unreleased
 
+## 0.5.7 — 2026-08-29
+
+### Fixed
+
+- Defaulted capital planning to the same seven-day window as first-run market-history readiness.
+- Propagated each requested planning horizon into regime, anomaly, and signal historical context, so imported daily observations reach the existing evidence gates instead of being rejected as isolated 24-hour prices.
+- Preserved conservative allocation: B-grade imported evidence remains visible for evaluation but correctly returns `WAIT` until the existing S/A deployment gates are satisfied.
+- Clarified that the first-run readiness indicator measures signal history, not capital-deployment eligibility.
+
+### Release
+
+- Bumped the application/frontend version to `0.5.7` for the capital-planning history-window hotfix.
+
 ## 0.5.6 — 2026-08-29
 
 ### Added
