@@ -1,6 +1,16 @@
 # Changelog
 ## Unreleased
 
+## 0.5.5 — 2026-08-29
+
+### Fixed
+
+- Retried transient Currency Exchange CDN connection and DNS failures, then stopped cleanly at the current-hour frontier instead of failing resumable backfill on an interrupted request or the unpublished next cursor.
+
+### Release
+
+- Bumped the application/frontend version to `0.5.5` for the Currency Exchange backfill recovery hotfix.
+
 ## 0.5.4 — 2026-08-29
 
 ### Fixed

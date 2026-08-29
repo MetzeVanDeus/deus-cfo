@@ -1,4 +1,5 @@
 import asyncio
+import httpx
 
 import cx_collector
 
@@ -31,6 +32,37 @@ def _install(monkeypatch, records, stored, ncid=2):
     monkeypatch.setattr(cx_collector.database, "insert_cx_hour", insert)
     monkeypatch.setattr(cx_collector.database, "set_cx_progress", set_progress)
     return progress, set_calls
+
+
+def test_fetch_retries_transient_connection_failure(monkeypatch):
+    calls = 0
+
+    class Response:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"next_change_id": 2, "markets": []}
+
+    class Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            pass
+
+        async def get(self, _url):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise httpx.ConnectError("temporary DNS failure")
+            return Response()
+
+    monkeypatch.setattr(cx_collector.httpx, "AsyncClient", lambda **_kwargs: Client())
+    monkeypatch.setattr(cx_collector, "REQUEST_DELAY", 0)
+
+    assert asyncio.run(cx_collector.fetch_currency_exchange(1))["next_change_id"] == 2
+    assert calls == 2
 
 
 def test_poll_advances_progress_on_new_data(monkeypatch):
@@ -75,6 +107,22 @@ def test_backfill_stops_at_current_hour(monkeypatch):
     monkeypatch.setattr(cx_collector, "_hour_cursor", lambda _hours_ago=0: 1)
     assert asyncio.run(cx_collector.backfill_currency_exchange(max_hours=5)) == 0
     assert progress == []
+
+
+def test_backfill_stops_after_advancing_to_current_hour(monkeypatch):
+    progress, _ = _install(monkeypatch, [{"market": 1}], stored=1, ncid=2)
+    fetched = []
+
+    async def fetch(change_id):
+        fetched.append(change_id)
+        return {"next_change_id": 2, "markets": [{"league": "Allflame"}]}
+
+    monkeypatch.setattr(cx_collector, "fetch_currency_exchange", fetch)
+    monkeypatch.setattr(cx_collector, "_hour_cursor", lambda _hours_ago=0: 2)
+
+    assert asyncio.run(cx_collector.backfill_currency_exchange(max_hours=5)) == 1
+    assert fetched == [1]
+    assert progress == [2]
 
 
 def test_empty_hour_does_not_advance_progress(monkeypatch):
