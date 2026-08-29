@@ -1,6 +1,13 @@
 # Changelog
 ## Unreleased
 
+### Changed
+
+- Collapsed Shared market context after a live league is saved and limited History window to Dashboard, Signals, and Explorer.
+- Replaced the Strategies one-option Horizon dropdown with static 24 hours copy and limited Profit Routes categories to registered divination-card families.
+- Softened Profit Routes eyebrow copy and treated patch-blocked states as warnings.
+- Surfaced WAIT on Data readiness until 24 snapshot hours exist, and replaced sparse Explorer charts with an empty WAIT state.
+
 ### Fixed
 
 - Enabled SAVE LEAGUE from a live draft on first run and league migration instead of gating it on the already-saved league.
