@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import axios from 'axios'
-import { api, formatUpdateBadge, fmtPct, historyWindowLabel, isDraftLeagueLive, leagueStatusTone, SIGNAL_TYPE_OPTIONS } from '../src/lib/helpers.js'
+import { api, formatUpdateBadge, fmtPct, historyWindowLabel, isDraftLeagueLive, leagueStatusTone, SIGNAL_TYPE_OPTIONS, adjacentTabId, hasPositiveChaosPerDivine, TABS } from '../src/lib/helpers.js'
 
  test('mutations receive the local session header while reads do not', async () => {
   const requests = []
@@ -63,4 +63,21 @@ test('signal type filters use unique detector ids and human labels', () => {
   assert.ok(ids.includes('volume_spike'))
   assert.equal(SIGNAL_TYPE_OPTIONS.find((option) => option.id === 'price_drop')?.label, 'Price drop')
   assert.equal(SIGNAL_TYPE_OPTIONS.find((option) => option.id === 'volume_spike')?.label, 'Volume spike (anomaly)')
+})
+
+test('arrow keys wrap across the six primary views', () => {
+  assert.equal(TABS.length, 6)
+  assert.equal(adjacentTabId('cfo', 'ArrowLeft'), 'profit-routes')
+  assert.equal(adjacentTabId('profit-routes', 'ArrowRight'), 'cfo')
+  assert.equal(adjacentTabId('dashboard', 'ArrowRight'), 'signals')
+  assert.equal(adjacentTabId('signals', 'Home'), 'cfo')
+  assert.equal(adjacentTabId('cfo', 'End'), 'profit-routes')
+  assert.equal(adjacentTabId('cfo', 'Tab'), null)
+})
+
+test('paper portfolio creation requires a positive chaos-per-Divine rate', () => {
+  assert.equal(hasPositiveChaosPerDivine(null), false)
+  assert.equal(hasPositiveChaosPerDivine({}), false)
+  assert.equal(hasPositiveChaosPerDivine({ chaos_per_divine: 0 }), false)
+  assert.equal(hasPositiveChaosPerDivine({ chaos_per_divine: 180.5 }), true)
 })

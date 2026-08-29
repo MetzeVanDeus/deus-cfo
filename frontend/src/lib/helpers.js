@@ -30,7 +30,7 @@ api.interceptors.request.use(async (config) => {
 })
 
 /**
- * Signal type → dracula color name.
+ * Signal type → semantic color name used by SignalBadge.
  * Red: crashes/supply shocks/bearish.
  * Green: pumps/demand/bullish/recoveries.
  * Cyan: mean-reverting.
@@ -101,6 +101,28 @@ export const leagueStatusTone = ({ selectedLeague = '', migrationRequired = fals
   if (!selectedLeague || migrationRequired) return 'warning'
   return 'positive'
 }
+
+export const TABS = [
+  { id: 'cfo', label: 'CFO' },
+  { id: 'dashboard', label: 'Dashboard' },
+  { id: 'signals', label: 'Signals' },
+  { id: 'explorer', label: 'Explorer' },
+  { id: 'strategies', label: 'Strategies' },
+  { id: 'profit-routes', label: 'Profit Routes' },
+]
+
+export const adjacentTabId = (currentId, key, tabs = TABS) => {
+  const index = tabs.findIndex((tab) => tab.id === currentId)
+  const last = tabs.length - 1
+  if (index < 0) return null
+  if (key === 'ArrowRight') return tabs[index === last ? 0 : index + 1].id
+  if (key === 'ArrowLeft') return tabs[index === 0 ? last : index - 1].id
+  if (key === 'Home') return tabs[0].id
+  if (key === 'End') return tabs[last].id
+  return null
+}
+
+export const hasPositiveChaosPerDivine = (plan) => Number(plan?.chaos_per_divine) > 0
 
 export const LEAGUE_EMPTY_TITLE = 'Select a league'
 export const LEAGUE_EMPTY_MESSAGE = 'Save a live league in Shared market context before this view requests market data.'

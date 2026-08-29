@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { api, isDraftLeagueLive, leagueStatusTone } from './lib/helpers'
+import { api, isDraftLeagueLive, leagueStatusTone, TABS, adjacentTabId } from './lib/helpers'
 import { DashboardTab } from './components/DashboardTab'
 import { SignalsTab } from './components/SignalsTab'
 import { ExplorerTab } from './components/ExplorerTab'
@@ -8,15 +8,6 @@ import { StrategiesTab } from './components/StrategiesTab'
 import { ProfitRoutesTab } from './components/ProfitRoutesTab'
 import { ErrorState, LoadingState } from './components/ui'
 import { AppFooter, UpdateBadge, UpdateModal, useUpdateCheck } from './components/UpdateNotice'
-
-const TABS = [
-  { id: 'cfo', label: 'CFO' },
-  { id: 'dashboard', label: 'Dashboard' },
-  { id: 'signals', label: 'Signals' },
-  { id: 'explorer', label: 'Explorer' },
-  { id: 'strategies', label: 'Strategies' },
-  { id: 'profit-routes', label: 'Profit Routes' },
-]
 
 function App() {
   const [activeTab, setActiveTab] = useState('cfo')
@@ -64,8 +55,42 @@ function App() {
   }
 
 
+  const onTabKeyDown = (event) => {
+    const nextId = adjacentTabId(activeTab, event.key)
+    if (!nextId) return
+    event.preventDefault()
+    setActiveTab(nextId)
+    queueMicrotask(() => document.getElementById(`tab-${nextId}`)?.focus())
+  }
+
   return <div className="app-shell">
-    <header className="topbar"><div className="brand"><span className="brand-mark">D</span><strong>DeusCFO</strong><span className="brand-divider" /><span className="brand-context">CAPITAL INTELLIGENCE</span></div><nav className="topnav" aria-label="Primary navigation">{TABS.map((tab) => <button key={tab.id} className={activeTab === tab.id ? 'nav-active' : ''} aria-current={activeTab === tab.id ? 'page' : undefined} onClick={() => setActiveTab(tab.id)}>{tab.label}</button>)}</nav><div className="topbar-end"><UpdateBadge status={update.status} onOpen={() => update.setModalOpen(true)} /><div className="topbar-status"><span className={`status-dot status-dot-${statusTone}`} />{selectedLeague || (migrationRequired ? configuredLeague || 'MIGRATE LEAGUE' : 'NO LEAGUE')}</div></div></header>
+    <a className="skip-link" href="#main-content">Skip to content</a>
+    <header className="topbar">
+      <div className="brand"><span className="brand-mark">D</span><strong>DeusCFO</strong><span className="brand-divider" /><span className="brand-context">CAPITAL INTELLIGENCE</span></div>
+      <nav className="topnav" role="tablist" aria-label="Primary views">
+        {TABS.map((tab) => (
+          <button
+            key={tab.id}
+            id={`tab-${tab.id}`}
+            type="button"
+            role="tab"
+            aria-selected={activeTab === tab.id}
+            aria-controls="main-content"
+            tabIndex={activeTab === tab.id ? 0 : -1}
+            className={activeTab === tab.id ? 'nav-active' : ''}
+            onClick={() => setActiveTab(tab.id)}
+            onKeyDown={onTabKeyDown}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </nav>
+      <p className="visually-hidden">Alt+1–6 switches views.</p>
+      <div className="topbar-end">
+        <UpdateBadge status={update.status} onOpen={() => update.setModalOpen(true)} />
+        <div className="topbar-status"><span className={`status-dot status-dot-${statusTone}`} />{selectedLeague || (migrationRequired ? configuredLeague || 'MIGRATE LEAGUE' : 'NO LEAGUE')}</div>
+      </div>
+    </header>
     {Object.values(bootErrors).filter(Boolean).length > 0 && <div className="boot-warning">{Object.values(bootErrors).filter(Boolean).join(' | ')} <button className="text-button" onClick={retryBoot}>RETRY</button></div>}
     <main className="main-shell">
       {selectedLeague && !migrationRequired && !leagueOpen ? (
@@ -81,7 +106,7 @@ function App() {
       )}
       {selectedLeague && <ReadinessPanel league={selectedLeague} />}
       {['dashboard', 'signals', 'explorer'].includes(activeTab) && <div className="history-control"><label htmlFor="history-window">History window</label><select id="history-window" className="input" value={historyHours} onChange={(event) => setHistoryHours(Number(event.target.value))}><option value="24">24 hours</option><option value="72">72 hours</option><option value="168">7 days</option></select></div>}
-      <ErrorBoundary key={activeTab}><div role="tabpanel">{activeTab === 'cfo' && <div className="cfo-stage"><CFOTab selectedLeague={selectedLeague} /></div>}{activeTab === 'dashboard' && <DashboardTab categories={categories} selectedLeague={selectedLeague} historyHours={historyHours} />}{activeTab === 'signals' && <SignalsTab selectedLeague={selectedLeague} historyHours={historyHours} />}{activeTab === 'explorer' && <ExplorerTab categories={categories} selectedLeague={selectedLeague} historyHours={historyHours} />}{activeTab === 'strategies' && <StrategiesTab categories={categories} selectedLeague={selectedLeague} />}{activeTab === 'profit-routes' && <ProfitRoutesTab categories={categories} selectedLeague={selectedLeague} />}</div></ErrorBoundary>
+      <ErrorBoundary key={activeTab}><div id="main-content" role="tabpanel" aria-labelledby={`tab-${activeTab}`}>{activeTab === 'cfo' && <div className="cfo-stage"><CFOTab selectedLeague={selectedLeague} /></div>}{activeTab === 'dashboard' && <DashboardTab categories={categories} selectedLeague={selectedLeague} historyHours={historyHours} />}{activeTab === 'signals' && <SignalsTab selectedLeague={selectedLeague} historyHours={historyHours} />}{activeTab === 'explorer' && <ExplorerTab categories={categories} selectedLeague={selectedLeague} historyHours={historyHours} />}{activeTab === 'strategies' && <StrategiesTab categories={categories} selectedLeague={selectedLeague} />}{activeTab === 'profit-routes' && <ProfitRoutesTab categories={categories} selectedLeague={selectedLeague} />}</div></ErrorBoundary>
     </main>
     <UpdateModal status={update.status} open={update.modalOpen} onClose={() => update.setModalOpen(false)} />
     <AppFooter status={update.status} checking={update.checking} message={update.footerMessage} onCheck={update.checkNow} />
