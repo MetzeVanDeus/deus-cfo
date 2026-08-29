@@ -1,6 +1,17 @@
 # Changelog
 ## Unreleased
 
+## 0.5.3 — 2026-08-29
+
+### Fixed
+
+- Made packaged runtime version resolution authoritative to bundled `_internal/VERSION` and fail closed when the bundle is missing, invalid, or connected to a different backend version.
+- Added release verification for both `frontend/package-lock.json` version fields.
+
+### Release
+
+- Bumped the application/frontend version to `0.5.3` for the packaged runtime identity hotfix.
+
 ## 0.5.2 — 2026-08-29
 
 ### Fixed

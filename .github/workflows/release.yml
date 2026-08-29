@@ -70,6 +70,12 @@ jobs:
       - name: Build packaged service
         shell: pwsh
         run: ./scripts/build_windows.ps1
+      - name: Verify packaged runtime identity
+        shell: pwsh
+        run: |
+          $sourceVersion = (Get-Content VERSION -Raw).Trim()
+          $runtimeIdentity = (& dist/DeusCFO/DeusCFO.exe version 2>&1 | Out-String).Trim()
+          if ($runtimeIdentity -ne "DeusCFO v$sourceVersion") { throw "Packaged runtime identity mismatch: $runtimeIdentity" }
       - name: Zip and checksum artifact
         shell: pwsh
         run: |

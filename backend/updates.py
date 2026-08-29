@@ -22,6 +22,10 @@ DEFAULT_CACHE_SECONDS = 8 * 60 * 60
 STABLE_VERSION = re.compile(r"^v?(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)$")
 
 
+class VersionError(RuntimeError):
+    """The packaged runtime has no valid bundled VERSION authority."""
+
+
 class UpdateCheckError(Exception):
     def __init__(self, code: str):
         self.code = code
@@ -59,12 +63,14 @@ def is_packaged() -> bool:
 
 
 def version_file_path() -> Path:
+    if is_packaged():
+        meipass = getattr(sys, "_MEIPASS", None)
+        if not meipass:
+            raise VersionError("bundled VERSION path is unavailable")
+        return Path(meipass) / "VERSION"
     override = os.environ.get("DEUSCFO_VERSION_FILE")
     if override:
         return Path(override)
-    if is_packaged():
-        bundled = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent)) / "VERSION"
-        return bundled
     return Path(__file__).resolve().parent.parent / "VERSION"
 
 
@@ -72,8 +78,12 @@ def read_current_version() -> str:
     path = version_file_path()
     try:
         value = path.read_text(encoding="utf-8").strip()
-    except OSError:
+    except OSError as exc:
+        if is_packaged():
+            raise VersionError(f"bundled VERSION is unavailable: {path}") from exc
         return ""
+    if is_packaged() and parse_stable_version(value) is None:
+        raise VersionError(f"bundled VERSION is invalid: {path}")
     return value
 
 

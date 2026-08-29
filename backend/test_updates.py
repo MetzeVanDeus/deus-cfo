@@ -1,4 +1,5 @@
 import asyncio
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -172,6 +173,32 @@ def test_source_development_build_does_not_report_nonsense(monkeypatch, tmp_path
     assert dev_status["update_available"] is False
 
 
+
+def test_packaged_version_ignores_stale_override(monkeypatch, tmp_path):
+    bundle = tmp_path / "_internal"
+    bundle.mkdir()
+    (bundle / "VERSION").write_text("0.5.3\n", encoding="utf-8")
+    stale = tmp_path / "old-VERSION"
+    stale.write_text("0.5.0\n", encoding="utf-8")
+    monkeypatch.setattr(updates.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(updates.sys, "_MEIPASS", str(bundle), raising=False)
+    monkeypatch.setenv("DEUSCFO_VERSION_FILE", str(stale))
+    assert updates.version_file_path() == bundle / "VERSION"
+    assert updates.read_current_version() == "0.5.3"
+
+
+@pytest.mark.parametrize("value", [None, "dev\n", "0.5.3\nextra"])
+def test_packaged_version_missing_or_invalid_fails_closed(monkeypatch, tmp_path, value):
+    bundle = tmp_path / "_internal"
+    bundle.mkdir()
+    if value is not None:
+        (bundle / "VERSION").write_text(value, encoding="utf-8")
+    monkeypatch.setattr(updates.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(updates.sys, "_MEIPASS", str(bundle), raising=False)
+    with pytest.raises(updates.VersionError):
+        updates.read_current_version()
+
+
 def test_cached_result_is_reused_until_forced(monkeypatch, tmp_path):
     monkeypatch.setenv("DEUSCFO_VERSION_FILE", str(tmp_path / "VERSION"))
     monkeypatch.setenv("DEUSCFO_UPDATE_CACHE_SECONDS", "3600")
@@ -219,6 +246,18 @@ def test_status_endpoint_returns_cached_payload(monkeypatch, tmp_path, client):
     assert payload["error"] is None
 
 
+
+def test_session_exposes_runtime_version(monkeypatch, tmp_path, client):
+    version_file = tmp_path / "VERSION"
+    write_version(version_file, "0.5.3\n")
+    monkeypatch.setenv("DEUSCFO_VERSION_FILE", str(version_file))
+    response = client.get("/api/session", headers=local_headers())
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["version"] == "0.5.3"
+    assert payload["token"]
+
+
 def test_manual_check_requires_session_then_refreshes(monkeypatch, tmp_path, client):
     monkeypatch.setenv("DEUSCFO_VERSION_FILE", str(tmp_path / "VERSION"))
     write_version(tmp_path / "VERSION", "0.5.0")
@@ -233,6 +272,25 @@ def test_manual_check_requires_session_then_refreshes(monkeypatch, tmp_path, cli
     assert response.status_code == 200
     assert response.json()["update_available"] is True
 
+
+
+@pytest.mark.parametrize("field", ["version", "packages"])
+def test_verify_release_version_rejects_package_lock_drift(tmp_path, field):
+    frontend = tmp_path / "frontend"
+    frontend.mkdir()
+    (tmp_path / "VERSION").write_text("0.5.3\n", encoding="utf-8")
+    (frontend / "package.json").write_text(json.dumps({"version": "0.5.3"}), encoding="utf-8")
+    lock = {"version": "0.5.3", "packages": {"": {"version": "0.5.3"}}}
+    lock[field] = "0.5.2" if field == "version" else {"": {"version": "0.5.2"}}
+    (frontend / "package-lock.json").write_text(json.dumps(lock), encoding="utf-8")
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "verify_release_version.py"), "--root", str(tmp_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "package-lock.json" in result.stderr
 
 def test_fetch_latest_release_maps_http_failures(monkeypatch):
     class Response:

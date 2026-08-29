@@ -71,6 +71,8 @@ jobs:
           $sourceVersion = (Get-Content VERSION -Raw).Trim()
           $packagedVersion = (Get-Content $versionFile -Raw).Trim()
           if ($packagedVersion -ne $sourceVersion) { throw "Packaged VERSION does not match VERSION" }
+          $runtimeIdentity = (& dist/DeusCFO/DeusCFO.exe version 2>&1 | Out-String).Trim()
+          if ($runtimeIdentity -ne "DeusCFO v$sourceVersion") { throw "Packaged runtime identity mismatch: $runtimeIdentity" }
 
   frontend:
     name: Frontend build
