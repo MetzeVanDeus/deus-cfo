@@ -82,10 +82,17 @@ async def _fetch_leagues() -> set[str]:
 async def fetch_currency_exchange(change_id: int | None = None) -> dict:
     """Fetch one hour of currency-exchange data."""
     url = CX_BASE if change_id is None else f"{CX_BASE}/{change_id}"
-    async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
-        resp = await client.get(url)
-        resp.raise_for_status()
-        return resp.json()
+    for attempt in range(3):
+        try:
+            async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
+                resp = await client.get(url)
+                resp.raise_for_status()
+                return resp.json()
+        except (httpx.ConnectError, httpx.ConnectTimeout):
+            if attempt == 2:
+                raise
+            log.warning("cx fetch: transient connection failure; retrying %s", url)
+            await asyncio.sleep(REQUEST_DELAY)
 
 
 def _parse_hour(data: dict, wanted_leagues: set[str]) -> tuple[str, list[dict]]:
@@ -212,6 +219,9 @@ async def backfill_currency_exchange(max_hours: int = _BACKFILL_DEFAULT_HOURS) -
         log.info("cx backfill: stored %d entries for hour %s (next=%s)", stored, ts, ncid)
         change_id = ncid
         hours += 1
+        if change_id >= _hour_cursor():
+            log.info("cx backfill: reached current hour at %s", change_id)
+            break
         await asyncio.sleep(REQUEST_DELAY)
     log.info("cx backfill: done, %d hours processed", hours)
     return hours
