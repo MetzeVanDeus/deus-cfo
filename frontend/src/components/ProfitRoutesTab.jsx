@@ -63,24 +63,38 @@ export function ProfitRoutesTab({ categories = [], selectedLeague }) {
 }
 
 function RouteCard({ route }) {
+  const units = route.capacity_units || 'capital'
   return <article className="terminal-panel profit-route">
     <div className="panel-title"><div><div className="eyebrow">{route.transformation_id || 'TRANSFORMATION'}</div><h2>{route.name || 'Unnamed route'}</h2></div><span>{route.status ? `STATUS · ${route.status.replaceAll('_', ' ').toUpperCase()}` : (route.source ? `SOURCE · ${route.source}` : 'BACKEND EVALUATION')}</span></div>
-    <div className="route-metrics metric-grid">
-      <Metric label="Status" value={route.status ? route.status.replaceAll('_', ' ') : '—'} />
-      <Metric label="Theoretical net (Chaos)" value={value(route.theoretical_net_profit)} tone={tone(route.theoretical_net_profit)} />
-      <Metric label="Executable net (Chaos)" value={value(route.executable_net_profit)} tone={tone(route.executable_net_profit)} />
-      <Metric label="Actual net (Chaos)" value={value(route.actual_net_profit)} tone={tone(route.actual_net_profit)} />
-      <Metric label="ROI (ratio)" value={ratioPercent(route.roi)} tone={tone(route.roi)} />
-      <Metric label="Theoretical ROI (ratio)" value={ratioPercent(route.theoretical_roi)} />
-      <Metric label="Executable ROI (ratio)" value={ratioPercent(route.executable_roi)} tone={tone(route.executable_roi)} />
-      <Metric label="Capital required (Chaos)" value={value(route.capital_required)} />
-      <Metric label="Profit / active hour (Chaos/h)" value={value(route.profit_per_active_hour)} tone={tone(route.profit_per_active_hour)} />
-      <Metric label="ROI / lock hour (ratio/h)" value={value(route.roi_per_lock_hour)} tone={tone(route.roi_per_lock_hour)} />
-      <Metric label={`Recommended capacity (${route.capacity_units || 'capital'})`} value={value(route.recommended_capacity ?? route.capacity)} />
-      <Metric label={`Budget capacity (${route.capacity_units || 'capital'})`} value={value(route.budget_capacity)} />
-      <Metric label={`Market capacity (${route.capacity_units || 'capital'})`} value={value(route.market_capacity)} />
-      <Metric label="Active execution (hours)" value={value(route.active_execution_time)} />
-      <Metric label="Capital lock / cycle (hours)" value={value(route.capital_lock_time)} />
+    <div className="metric-group">
+      <h3>Economics</h3>
+      <div className="metric-grid">
+        <Metric label="Status" value={route.status ? route.status.replaceAll('_', ' ') : '—'} />
+        <Metric label="Theoretical net (Chaos)" value={value(route.theoretical_net_profit)} tone={tone(route.theoretical_net_profit)} />
+        <Metric label="Executable net (Chaos)" value={value(route.executable_net_profit)} tone={tone(route.executable_net_profit)} />
+        <Metric label="Actual net (Chaos)" value={value(route.actual_net_profit)} tone={tone(route.actual_net_profit)} />
+        <Metric label="ROI (ratio)" value={ratioPercent(route.roi)} tone={tone(route.roi)} />
+        <Metric label="Theoretical ROI (ratio)" value={ratioPercent(route.theoretical_roi)} />
+        <Metric label="Executable ROI (ratio)" value={ratioPercent(route.executable_roi)} tone={tone(route.executable_roi)} />
+        <Metric label="Capital required (Chaos)" value={value(route.capital_required)} />
+        <Metric label="Profit / active hour (Chaos/h)" value={value(route.profit_per_active_hour)} tone={tone(route.profit_per_active_hour)} />
+        <Metric label="ROI / lock hour (ratio/h)" value={value(route.roi_per_lock_hour)} tone={tone(route.roi_per_lock_hour)} />
+      </div>
+    </div>
+    <div className="metric-group">
+      <h3>Capacity</h3>
+      <div className="metric-grid">
+        <Metric label={`Recommended (${units})`} value={value(route.recommended_capacity ?? route.capacity)} />
+        <Metric label={`Budget (${units})`} value={value(route.budget_capacity)} />
+        <Metric label={`Market (${units})`} value={value(route.market_capacity)} />
+      </div>
+    </div>
+    <div className="metric-group">
+      <h3>Time</h3>
+      <div className="metric-grid">
+        <Metric label="Active execution (hours)" value={value(route.active_execution_time)} />
+        <Metric label="Capital lock / cycle (hours)" value={value(route.capital_lock_time)} />
+      </div>
     </div>
     {route.batch_plan && <BatchPlan plan={route.batch_plan} />}
     <div className="route-columns">

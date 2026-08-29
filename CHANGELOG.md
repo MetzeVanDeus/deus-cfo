@@ -6,7 +6,10 @@
 - Collapsed Shared market context after a live league is saved and limited History window to Dashboard, Signals, and Explorer.
 - Replaced the Strategies one-option Horizon dropdown with static 24 hours copy and limited Profit Routes categories to registered divination-card families.
 - Softened Profit Routes eyebrow copy and treated patch-blocked states as warnings.
-- Surfaced WAIT on Data readiness until 24 snapshot hours exist, and replaced sparse Explorer charts with an empty WAIT state.
+- Capped page-head and paper-idea prose at 68ch and migrated Flip Finder, Explorer, and signal badges onto brass terminal primitives.
+- Added skip-to-content, real tablist semantics with arrow-key movement, and a visually hidden Alt+1–6 hint.
+- Fitted metric grids with auto-fit columns, grouped Profit Routes metrics by economics/capacity/time, and stopped packing seven paper metrics into six columns.
+- Relabeled LIVE-CANDIDATE as analysis-only, surfaced desired horizon hours, gated CREATE PAPER PORTFOLIO on a plan conversion rate, and moved REALIZE into an expandable row.
 
 ### Fixed
 

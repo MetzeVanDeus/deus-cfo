@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { api, fmtPrice, fmtVol, fmtPct, fmtTime } from '../lib/helpers'
-import { LoadingState, EmptyState, ErrorState, ConfidenceBar, SignalBadge, LeagueEmpty } from './ui'
+import { LoadingState, EmptyState, ErrorState, ConfidencePercent, SignalBadge, LeagueEmpty } from './ui'
+
 export function ExplorerTab({ categories, selectedLeague, historyHours = 24 }) {
   const [selectedCategory, setSelectedCategory] = useState('Currency')
   const [items, setItems] = useState([])
@@ -13,7 +14,6 @@ export function ExplorerTab({ categories, selectedLeague, historyHours = 24 }) {
   const [itemData, setItemData] = useState(null)
   const [loadingDetail, setLoadingDetail] = useState(false)
   const [error, setError] = useState('')
-  // Fetch items when category or league changes
   useEffect(() => {
     if (!selectedLeague || !selectedCategory) return
     let cancelled = false
@@ -29,7 +29,6 @@ export function ExplorerTab({ categories, selectedLeague, historyHours = 24 }) {
     }).catch(() => { if (!cancelled) { setItemsError('Failed to load market items'); setLoadingItems(false) } })
     return () => { cancelled = true }
   }, [selectedLeague, selectedCategory])
-  // Fetch detail when item selected
   useEffect(() => {
     if (!selectedLeague || !selectedCategory || !selectedItem) return
     let cancelled = false
@@ -46,36 +45,35 @@ export function ExplorerTab({ categories, selectedLeague, historyHours = 24 }) {
       setRegime(rR.data)
       setStats(sR.data)
       setLoadingDetail(false)
-    }).catch(e => {
+    }).catch(() => {
       if (cancelled) return
       setError('Failed to load item data')
       setLoadingDetail(false)
     })
-    // Get item info from items list
-    const found = items.find(i => i.item_id === selectedItem)
-    setItemData(found || null)
+    setItemData(items.find(i => i.item_id === selectedItem) || null)
     return () => { cancelled = true }
-  }, [selectedLeague, selectedCategory, selectedItem, historyHours])
+  }, [selectedLeague, selectedCategory, selectedItem, historyHours, items])
   return (
-    <div className="space-y-4">
-      {/* Controls */}
-      <div className="card !p-4">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div>
-            <label className="block text-sm font-medium text-dracula-comment mb-2">Category</label>
-            <select value={selectedCategory} onChange={(e) => { setSelectedCategory(e.target.value); setSelectedItem('') }} className="input w-full">
+    <div className="terminal-page">
+      <div className="page-head"><div><div className="eyebrow">ITEM RESEARCH / {selectedLeague || '—'}</div><h1>Explorer</h1><p className="muted">Price history, regime, and rolling statistics for one item.</p></div></div>
+      <div className="terminal-panel">
+        <div className="form-row explorer-controls">
+          <label className="field">
+            <span>Category</span>
+            <select value={selectedCategory} onChange={(e) => { setSelectedCategory(e.target.value); setSelectedItem('') }} className="input">
               {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-dracula-comment mb-2">Item</label>
-            <select value={selectedItem} onChange={(e) => setSelectedItem(e.target.value)} className="input w-full" disabled={loadingItems || items.length === 0 || !selectedLeague}>
-              {loadingItems && <option>Loading items...</option>}
-              {!loadingItems && !selectedLeague && <option>Save a live league first</option>}
-              {!loadingItems && selectedLeague && items.length === 0 && <option>No items in category</option>}
+          </label>
+          <label className="field">
+            <span>Item</span>
+            <select value={selectedItem} onChange={(e) => setSelectedItem(e.target.value)} className="input" disabled={loadingItems || items.length === 0 || !selectedLeague}>
+              {loadingItems && <option value="">Loading items...</option>}
+              {!loadingItems && !selectedLeague && <option value="">Save a live league first</option>}
+              {!loadingItems && selectedLeague && items.length === 0 && <option value="">No items in category</option>}
+              {!loadingItems && items.length > 0 && <option value="">Select an item</option>}
               {!loadingItems && items.map(i => <option key={i.item_id} value={i.item_id}>{i.item_name}{i.variant ? ` (${i.variant})` : ''}</option>)}
             </select>
-          </div>
+          </label>
         </div>
       </div>
       {itemsError && !loadingItems && <ErrorState message={itemsError} onRetry={() => window.location.reload()} />}
@@ -86,15 +84,12 @@ export function ExplorerTab({ categories, selectedLeague, historyHours = 24 }) {
       {loadingDetail && <LoadingState text="Loading item data..." />}
       {error && !loadingDetail && <ErrorState message={error} />}
       {selectedItem && !loadingDetail && !error && regime && stats && (
-        <div className="space-y-4 animate-fade-in">
-          {/* Top Row: Price + Regime */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="explorer-detail">
+          <div className="output-grid">
             <PriceCard history={history} itemData={itemData} />
             <RegimeCard regime={regime} />
           </div>
-          {/* Statistics */}
           <StatsCard stats={stats} historyHours={historyHours} />
-          {/* Price History Chart */}
           <PriceChart history={history} historyHours={historyHours} />
         </div>
       )}
@@ -108,56 +103,40 @@ function PriceCard({ history, itemData }) {
   const changePct = first && current ? ((current - first) / first) * 100 : 0
   const isUp = changePct >= 0
   return (
-    <div className="card">
-      <h3 className="text-sm font-semibold text-dracula-comment uppercase tracking-wide mb-3">Current Price</h3>
-      <div className="flex items-end gap-4">
-        <div>
-          <div className="text-3xl font-bold text-dracula-fg font-mono">{fmtPrice(current)}</div>
-          <div className="text-sm text-dracula-comment">chaos</div>
-        </div>
-        <div className={`flex items-center gap-1 text-lg font-semibold mb-1 ${isUp ? 'text-dracula-green' : 'text-dracula-red'}`}>
-          <span>{fmtPct(changePct)}</span>
-        </div>
+    <section className="terminal-panel">
+      <div className="panel-title"><h2>Current Price</h2></div>
+      <div className="metric-grid">
+        <div className="metric"><span>Price (chaos)</span><strong>{fmtPrice(current)}</strong></div>
+        <div className="metric"><span>Change</span><strong className={isUp ? 'positive' : 'negative'}>{fmtPct(changePct)}</strong></div>
+        {itemData && <div className="metric"><span>Volume</span><strong>{fmtVol(itemData.volume)}</strong></div>}
       </div>
-      {itemData && (
-        <div className="mt-3 text-sm text-dracula-comment">
-          Volume: <span className="text-dracula-fg font-mono">{fmtVol(itemData.volume)}</span>
-        </div>
-      )}
-    </div>
+    </section>
   )
 }
 function RegimeCard({ regime }) {
   const conf = regime.confidence
   return (
-    <div className="card">
-      <h3 className="text-sm font-semibold text-dracula-comment uppercase tracking-wide mb-3">Market Regime</h3>
-      <div className="flex items-center gap-3 mb-3">
-        <SignalBadge type={regime.regime} />
-        <span className="text-sm text-dracula-comment">{Math.round(conf * 100)}% confidence</span>
-      </div>
-      <p className="text-sm text-dracula-fg/90 mb-3">{regime.explanation}</p>
-      <div>
-        <div className="text-xs text-dracula-comment mb-1">Confidence</div>
-        <ConfidenceBar score={conf} />
-      </div>
+    <section className="terminal-panel">
+      <div className="panel-title"><h2>Market Regime</h2><span>{Math.round(conf * 100)}% confidence</span></div>
+      <div className="regime-head"><SignalBadge type={regime.regime} /><ConfidencePercent score={conf} /></div>
+      <p className="muted">{regime.explanation}</p>
       {regime.signals && (
-        <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+        <div className="metric-grid">
           {regime.signals.price_change_pct != null && (
-            <div><span className="text-dracula-comment">Price change: </span><span className="text-dracula-fg font-mono">{fmtPct(regime.signals.price_change_pct)}</span></div>
+            <div className="metric"><span>Price change</span><strong>{fmtPct(regime.signals.price_change_pct)}</strong></div>
           )}
           {regime.signals.volatility_pct != null && (
-            <div><span className="text-dracula-comment">Volatility: </span><span className="text-dracula-fg font-mono">{regime.signals.volatility_pct.toFixed(1)}%</span></div>
+            <div className="metric"><span>Volatility</span><strong>{regime.signals.volatility_pct.toFixed(1)}%</strong></div>
           )}
           {regime.signals.trend && (
-            <div><span className="text-dracula-comment">Trend: </span><span className="text-dracula-fg">{regime.signals.trend}</span></div>
+            <div className="metric"><span>Trend</span><strong>{regime.signals.trend}</strong></div>
           )}
           {regime.signals.volume_change != null && (
-            <div><span className="text-dracula-comment">Volume change: </span><span className="text-dracula-fg font-mono">{regime.signals.volume_change.toFixed(2)}x</span></div>
+            <div className="metric"><span>Volume change</span><strong>{regime.signals.volume_change.toFixed(2)}x</strong></div>
           )}
         </div>
       )}
-    </div>
+    </section>
   )
 }
 function StatsCard({ stats, historyHours = 24 }) {
@@ -174,17 +153,14 @@ function StatsCard({ stats, historyHours = 24 }) {
     ['Avg Volume', fmtVol(stats.volume_mean)],
   ]
   return (
-    <div className="card">
-      <h3 className="text-sm font-semibold text-dracula-comment uppercase tracking-wide mb-4">Rolling Statistics ({historyHours}h)</h3>
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+    <section className="terminal-panel">
+      <div className="panel-title"><h2>Rolling Statistics ({historyHours}h)</h2></div>
+      <div className="metric-grid">
         {rows.map(([label, val]) => (
-          <div key={label}>
-            <div className="stat-label">{label}</div>
-            <div className="stat-value">{val}</div>
-          </div>
+          <div className="metric" key={label}><span>{label}</span><strong>{val}</strong></div>
         ))}
       </div>
-    </div>
+    </section>
   )
 }
 function PriceChart({ history, historyHours = 24 }) {
@@ -202,11 +178,11 @@ function PriceChart({ history, historyHours = 24 }) {
   }, [history])
   if (points.length < 2) {
     return (
-      <div className="card">
-        <h3 className="text-sm font-semibold text-dracula-comment uppercase tracking-wide mb-4">Price History</h3>
+      <section className="terminal-panel">
+        <div className="panel-title"><h2>Price History</h2></div>
         <EmptyState title="Not enough history in this window" message="WAIT is the honest state until at least two observed prices exist. No trend is drawn." compact />
         {points.length === 1 && <p className="muted small">Observed {fmtPrice(points[0].price)}c at {fmtTime(points[0].timestamp)}.</p>}
-      </div>
+      </section>
     )
   }
   const prices = points.map(p => p.price)
@@ -214,17 +190,17 @@ function PriceChart({ history, historyHours = 24 }) {
   const max = Math.max(...prices)
   const range = max - min || 1
   return (
-    <div className="card">
-      <div className="flex items-center justify-between mb-4">
-        <h3 className="text-sm font-semibold text-dracula-comment uppercase tracking-wide">Price History</h3>
-        <span className="text-xs text-dracula-comment">{points.length} data points · {historyHours}h</span>
+    <section className="terminal-panel">
+      <div className="panel-title">
+        <h2>Price History</h2>
+        <span>{points.length} data points · {historyHours}h</span>
       </div>
       <svg className="price-chart" viewBox="0 0 600 140" role="img" aria-label="Price history line chart">{(() => { const coords = points.map((p, i) => `${(i / Math.max(1, points.length - 1)) * 590 + 5},${130 - ((p.price - min) / range) * 115}`); return <><polyline fill="none" stroke="var(--brass-bright)" strokeWidth="2" points={coords.join(' ')} />{coords.map((point, i) => <circle key={i} cx={point.split(',')[0]} cy={point.split(',')[1]} r="3" fill="var(--brass-bright)"><title>{`${fmtPrice(points[i].price)}c · ${fmtTime(points[i].timestamp)}`}</title></circle>)}</> })()}</svg>
       <p className="muted small">Price range {fmtPrice(min)}c – {fmtPrice(max)}c</p>
-      <div className="flex justify-between text-xs text-dracula-comment">
+      <div className="chart-axis">
         <span>{fmtTime(points[0].timestamp)}</span>
         <span>{fmtTime(points.at(-1).timestamp)}</span>
       </div>
-    </div>
+    </section>
   )
 }

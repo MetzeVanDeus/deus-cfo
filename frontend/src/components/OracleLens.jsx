@@ -78,8 +78,18 @@ function useReducedMotion() {
 
 export function OracleLens() {
   const reducedMotion = useReducedMotion()
+  const [webgl] = useState(() => {
+    if (typeof document === 'undefined') return false
+    try {
+      const canvas = document.createElement('canvas')
+      return Boolean(canvas.getContext('webgl2') || canvas.getContext('webgl') || canvas.getContext('experimental-webgl'))
+    } catch {
+      return false
+    }
+  })
+  const useCanvas = !reducedMotion && webgl
 
-  return <aside className={`oracle-lens${reducedMotion ? ' oracle-lens-static' : ''}`} aria-hidden="true">
+  return <aside className={`oracle-lens${reducedMotion || !webgl ? ' oracle-lens-static' : ''}`} aria-hidden="true">
     <div className="oracle-lens-frame">
       <div className="oracle-lens-fallback" aria-hidden="true">
         <i className="oracle-lens-core" />
@@ -89,7 +99,7 @@ export function OracleLens() {
         <i className="oracle-lens-node oracle-lens-node-two" />
         <i className="oracle-lens-node oracle-lens-node-three" />
       </div>
-      {!reducedMotion && <SceneBoundary><Suspense fallback={null}><OracleCanvas /></Suspense></SceneBoundary>}
+      {useCanvas && <SceneBoundary><Suspense fallback={null}><OracleCanvas /></Suspense></SceneBoundary>}
     </div>
     <span className="oracle-lens-label">ORACLE / CAPITAL SIGNAL</span>
   </aside>
