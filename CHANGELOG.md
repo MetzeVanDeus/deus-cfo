@@ -1,13 +1,24 @@
 # Changelog
 ## Unreleased
 
-### Changed
-
-- Restored the pre-surface-pass outline color on panels, cards, decision blocks, profit-route cards, and the update modal. Divider and field borders stay as they are.
+## 0.5.0 — 2026-08-29
 
 ### Added
 
 - Added a single `VERSION` source, a GitHub Releases update check, `GET /api/update/status`, and a top-bar update badge with a footer refresh control.
+- Added shared empty/loading/error state presentation and a clearer action hierarchy with primary, secondary, segmented, and disabled control treatments.
+
+### Changed
+
+- Reworked the frontend into a consistent dark-brass design system with centralized tokens, six-step typography and spacing scales, clearer sunken/standard/raised surfaces, stronger field boundaries, and system font stacks without bundled or remote font assets.
+- Split the frontend styling into Tailwind entry, token, base, and component stylesheets; removed duplicate purple/brass token vocabulary and mapped remaining legacy `dracula-*` utilities onto the brass palette pending component cleanup.
+- Moved the Oracle decoration into a dedicated CFO header grid column so it no longer overlaps market state or simulation controls.
+- Restored the pre-surface-pass outline color on panels, cards, decision blocks, profit-route cards, and the update modal while retaining the newer divider and field borders.
+- Packaged Windows builds now include `VERSION`, and CI/release verification requires `VERSION`, `frontend/package.json`, and tagged releases to agree.
+
+### Release
+
+- Bumped the application/frontend version to `0.5.0` for the design-system overhaul and GitHub Releases update-checking flow.
 
 ## 0.4.0 — 2026-08-27
 
