@@ -60,11 +60,7 @@ export function ExplorerTab({ categories, selectedLeague, historyHours = 24 }) {
     <div className="space-y-4">
       {/* Controls */}
       <div className="card !p-4">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div>
-            <label className="block text-sm font-medium text-dracula-comment mb-2">Shared league</label>
-            <div className="input w-full" aria-label="Shared league">{selectedLeague || 'Choose shared league above'}</div>
-          </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
             <label className="block text-sm font-medium text-dracula-comment mb-2">Category</label>
             <select value={selectedCategory} onChange={(e) => { setSelectedCategory(e.target.value); setSelectedItem('') }} className="input w-full">
@@ -204,11 +200,12 @@ function PriceChart({ history, historyHours = 24 }) {
     for (let i = 1; i < 59; i += 1) indexes.add(Math.round(i * (normalized.length - 1) / 59))
     return [...indexes].sort((a, b) => a - b).map((index) => normalized[index])
   }, [history])
-  if (points.length === 0) {
+  if (points.length < 2) {
     return (
       <div className="card">
         <h3 className="text-sm font-semibold text-dracula-comment uppercase tracking-wide mb-4">Price History</h3>
-        <p className="text-dracula-comment text-sm">No price history available.</p>
+        <EmptyState title="Not enough history in this window" message="WAIT is the honest state until at least two observed prices exist. No trend is drawn." compact />
+        {points.length === 1 && <p className="muted small">Observed {fmtPrice(points[0].price)}c at {fmtTime(points[0].timestamp)}.</p>}
       </div>
     )
   }
@@ -223,11 +220,7 @@ function PriceChart({ history, historyHours = 24 }) {
         <span className="text-xs text-dracula-comment">{points.length} data points · {historyHours}h</span>
       </div>
       <svg className="price-chart" viewBox="0 0 600 140" role="img" aria-label="Price history line chart">{(() => { const coords = points.map((p, i) => `${(i / Math.max(1, points.length - 1)) * 590 + 5},${130 - ((p.price - min) / range) * 115}`); return <><polyline fill="none" stroke="var(--brass-bright)" strokeWidth="2" points={coords.join(' ')} />{coords.map((point, i) => <circle key={i} cx={point.split(',')[0]} cy={point.split(',')[1]} r="3" fill="var(--brass-bright)"><title>{`${fmtPrice(points[i].price)}c · ${fmtTime(points[i].timestamp)}`}</title></circle>)}</> })()}</svg>
-      {/* Axis labels */}
-      <div className="flex justify-between text-xs text-dracula-comment font-mono">
-        <span>{fmtPrice(min)}c</span>
-        <span>{fmtPrice(max)}c</span>
-      </div>
+      <p className="muted small">Price range {fmtPrice(min)}c – {fmtPrice(max)}c</p>
       <div className="flex justify-between text-xs text-dracula-comment">
         <span>{fmtTime(points[0].timestamp)}</span>
         <span>{fmtTime(points.at(-1).timestamp)}</span>

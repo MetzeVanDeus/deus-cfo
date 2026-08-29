@@ -56,12 +56,7 @@ export function FlipFinder({ categories, selectedLeague }) {
       <section className="card animate-fade-in mb-6">
         <h2 className="text-xl font-semibold text-dracula-fg mb-4">Budget Flip Finder</h2>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
-          <div>
-            <label className="block text-sm font-medium text-dracula-comment mb-2">Shared league</label>
-            <div className="input w-full" aria-label="Shared league">{selectedLeague || 'Choose shared league above'}</div>
-          </div>
-
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           <div>
             <label className="block text-sm font-medium text-dracula-comment mb-2">Category</label>
             <select value={selectedCategory} onChange={(e) => setSelectedCategory(e.target.value)} className="input w-full">

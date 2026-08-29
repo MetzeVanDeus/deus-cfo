@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import axios from 'axios'
-import { api, formatUpdateBadge, fmtPct, historyWindowLabel, isDraftLeagueLive, leagueStatusTone } from '../src/lib/helpers.js'
+import { api, formatUpdateBadge, fmtPct, historyWindowLabel, isDraftLeagueLive, leagueStatusTone, SIGNAL_TYPE_OPTIONS } from '../src/lib/helpers.js'
 
  test('mutations receive the local session header while reads do not', async () => {
   const requests = []
@@ -54,4 +54,13 @@ test('league status tone is warning until a live league is saved', () => {
   assert.equal(leagueStatusTone({ selectedLeague: 'Standard', migrationRequired: true }), 'warning')
   assert.equal(leagueStatusTone({ selectedLeague: 'Standard', bootError: true }), 'negative')
   assert.equal(leagueStatusTone({ selectedLeague: 'Standard' }), 'positive')
+})
+
+test('signal type filters use unique detector ids and human labels', () => {
+  const ids = SIGNAL_TYPE_OPTIONS.map((option) => option.id)
+  assert.equal(ids.length, new Set(ids).size)
+  assert.ok(ids.includes('Volume Spike'))
+  assert.ok(ids.includes('volume_spike'))
+  assert.equal(SIGNAL_TYPE_OPTIONS.find((option) => option.id === 'price_drop')?.label, 'Price drop')
+  assert.equal(SIGNAL_TYPE_OPTIONS.find((option) => option.id === 'volume_spike')?.label, 'Volume spike (anomaly)')
 })

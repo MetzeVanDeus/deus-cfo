@@ -36,6 +36,25 @@ api.interceptors.request.use(async (config) => {
  * Cyan: mean-reverting.
  * Yellow: volume spikes.
  */
+export const SIGNAL_TYPE_OPTIONS = [
+  { id: 'All', label: 'All' },
+  { id: 'Supply Shock', label: 'Supply Shock' },
+  { id: 'Demand Shock', label: 'Demand Shock' },
+  { id: 'Crashing', label: 'Crashing' },
+  { id: 'Pumping', label: 'Pumping' },
+  { id: 'Recovering', label: 'Recovering' },
+  { id: 'Mean-Reverting', label: 'Mean-Reverting' },
+  { id: 'Trending Up', label: 'Trending Up' },
+  { id: 'Trending Down', label: 'Trending Down' },
+  { id: 'Volume Spike', label: 'Volume Spike' },
+  { id: 'price_drop', label: 'Price drop' },
+  { id: 'price_spike', label: 'Price spike' },
+  { id: 'volume_spike', label: 'Volume spike (anomaly)' },
+  { id: 'volume_collapse', label: 'Volume collapse' },
+  { id: 'divergence', label: 'Divergence' },
+  { id: 'recovery', label: 'Recovery' },
+]
+
 export const SIGNAL_COLORS = {
   'Supply Shock': 'red',
   'Crashing': 'red',

@@ -170,6 +170,10 @@
   background:var(--warning-surface);
   font-size:var(--fs-small);
 }
+.warning-panel {
+  border-color:var(--warning-line);
+  background:var(--warning-surface);
+}
 .main-shell {
   max-width:1440px;
   width:100%;
@@ -875,6 +879,12 @@ a.btn-primary,a.btn-secondary {
 .league-panel {
   grid-template-columns:minmax(0,1fr) auto;
   align-items:end;
+}
+.league-panel-collapsed {
+  align-items:center;
+}
+.league-panel-collapsed h2 strong {
+  margin-left:var(--sp-2);
 }
 .league-controls {
   display:flex;
