@@ -2,6 +2,7 @@
 
 import logging
 import math
+import re
 import statistics
 from datetime import datetime, timedelta, timezone
 
@@ -18,27 +19,31 @@ EXCHANGE_URL = f"{POE_NINJA_BASE}/poe1/api/economy/exchange/current/overview"
 # and collector.  Keeping the endpoint mapping here prevents drift between them.
 EXCHANGE_TYPES = {
     "Currency": "Currency",
-    "Fragment": "Fragments",
-    "Scarab": "Scarabs",
-    "Essence": "Essences",
-    "Oil": "Oils",
-    "Fossil": "Fossils",
-    "DeliriumOrb": "Delirium Orbs",
-    "DivinationCard": "Divination Cards",
+    "Fragment": "Fragment",
+    "Scarab": "Scarab",
+    "Essence": "Essence",
+    "Oil": "Oil",
+    "Fossil": "Fossil",
+    "DeliriumOrb": "DeliriumOrb",
+    "DivinationCard": "DivinationCard",
 }
 STASH_TYPES = {
-    "SkillGem": "Skill Gems",
-    "UniqueWeapon": "Unique Weapons",
-    "UniqueArmour": "Unique Armours",
-    "UniqueAccessory": "Unique Accessories",
-    "UniqueJewel": "Unique Jewels",
-    "UniqueFlask": "Unique Flasks",
-    "Map": "Maps",
-    "BlightedMap": "Blighted Maps",
-    "UniqueMap": "Unique Maps",
+    "SkillGem": "SkillGem",
+    "UniqueWeapon": "UniqueWeapon",
+    "UniqueArmour": "UniqueArmour",
+    "UniqueAccessory": "UniqueAccessory",
+    "UniqueJewel": "UniqueJewel",
+    "UniqueFlask": "UniqueFlask",
+    "Map": "Map",
+    "BlightedMap": "BlightedMap",
+    "UniqueMap": "UniqueMap",
 }
 ALL_CATEGORIES = {**EXCHANGE_TYPES, **STASH_TYPES}
 COLLECTION_TYPES = {**EXCHANGE_TYPES, "UniqueAccessory": STASH_TYPES["UniqueAccessory"]}
+
+
+def category_name(category: str) -> str:
+    return re.sub(r"(?<!^)(?=[A-Z])", " ", category)
 
 
 def format_slug(slug: str) -> str:

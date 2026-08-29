@@ -1,5 +1,6 @@
 import asyncio
 import pytest
+from datetime import datetime, timedelta, timezone
 
 import collector
 
@@ -10,6 +11,11 @@ def test_configured_league_requires_explicit_value(tmp_path, monkeypatch):
     assert collector.configured_league() == ""
     monkeypatch.setenv("DEUSCFO_LEAGUE", "Settlers")
     assert collector.configured_league() == "Settlers"
+
+
+def test_poe_ninja_category_types_use_current_singular_api_keys():
+    assert all(category == api_type for category, api_type in collector._EXCHANGE_TYPES.items())
+    assert all(category == api_type for category, api_type in collector._STASH_TYPES.items())
 
 
 def test_collector_uses_api_type_keys_and_blocks_stash_history(monkeypatch):
@@ -131,6 +137,82 @@ def test_no_sparkline_backfill_in_persisted_snapshots(monkeypatch):
     assert all(r["observation_type"] == "DIRECT_OBSERVATION" for r in records)
     assert all(r["source"] == "poe.ninja" for r in records)
     assert not any(r.get("source", "").startswith("poe.ninja_sparkline") for r in records)
+
+
+def test_market_history_backfill_imports_real_daily_samples(monkeypatch):
+    inserted = []
+    now = datetime.now(timezone.utc)
+
+    class Response:
+        status_code = 200
+
+        def __init__(self, payload):
+            self.payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self.payload
+
+    class Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return None
+
+        async def get(self, url, params):
+            if url.endswith("/overview"):
+                if params["type"] == "UniqueAccessory":
+                    return Response({"lines": [{
+                        "id": 42,
+                        "detailsId": "test-belt",
+                        "name": "Test Belt",
+                        "chaosValue": 100,
+                        "listingCount": 50,
+                    }]})
+                return Response({"lines": [{
+                    "id": f"test-{params['type'].lower().replace(' ', '-')}",
+                    "primaryValue": 10,
+                    "volumePrimaryValue": 100,
+                }]})
+            if "exchange" in url:
+                return Response({"pairs": [{"id": "chaos", "history": [
+                    {
+                        "timestamp": (now - timedelta(days=2)).isoformat(),
+                        "rate": 8,
+                        "volumePrimaryValue": 80,
+                    },
+                    {
+                        "timestamp": (now - timedelta(days=1)).isoformat(),
+                        "rate": 9,
+                        "volumePrimaryValue": 90,
+                    },
+                ]}]})
+            return Response([
+                {"daysAgo": 2, "value": 90, "count": 40},
+                {"daysAgo": 1, "value": 95, "count": 45},
+            ])
+
+    async def insert(records, timestamp=None):
+        inserted.extend((timestamp, record) for record in records)
+        return len(records)
+
+    async def prune(*_args, **_kwargs):
+        return {}
+
+    monkeypatch.setattr(collector.httpx, "AsyncClient", lambda **_: Client())
+    monkeypatch.setattr(collector.database, "insert_snapshots", insert)
+    monkeypatch.setattr(collector.database, "prune_market_data", prune)
+
+    result = asyncio.run(collector.backfill_market_history("Allflame"))
+
+    assert result == {"categories_processed": 9, "items_processed": 9, "rows_stored": 18}
+    assert len(inserted) == 18
+    assert all(record["observation_type"] == "IMPORTED_TRUSTED" for _, record in inserted)
+    assert any(record["item_id"] == "test-belt" for _, record in inserted)
+    assert {record["category"] for _, record in inserted} == set(collector.PERSISTED_CATEGORIES)
 
 
 def test_category_sweep_uses_one_timestamp(monkeypatch):

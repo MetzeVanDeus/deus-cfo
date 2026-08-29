@@ -6,7 +6,7 @@ import json
 import logging
 import math
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from statistics import median
 from pathlib import Path
 from urllib.parse import quote
@@ -21,6 +21,19 @@ log = logging.getLogger("deuscfo.collector")
 POE_NINJA_BASE = "https://poe.ninja"
 EXCHANGE_URL = f"{POE_NINJA_BASE}/poe1/api/economy/exchange/current/overview"
 STASH_URL = f"{POE_NINJA_BASE}/poe1/api/economy/stash/current/item/overview"
+EXCHANGE_HISTORY_URL = f"{POE_NINJA_BASE}/poe1/api/economy/exchange/current/details"
+STASH_HISTORY_URL = f"{POE_NINJA_BASE}/poe1/api/economy/stash/current/item/history"
+HISTORY_ITEMS_PER_CATEGORY = 20
+_history_task: asyncio.Task | None = None
+_history_lock = asyncio.Lock()
+_history_status = {
+    "status": "idle",
+    "league": None,
+    "categories_processed": 0,
+    "items_processed": 0,
+    "rows_stored": 0,
+    "error": None,
+}
 
 TRADE_API_BASE = "https://www.pathofexile.com/api/trade"
 # These are trade-site endpoints, not entries in GGG's official Developer API reference.
@@ -195,6 +208,216 @@ def _snapshot_records(data, league: str, category: str, is_exchange: bool) -> li
         if record is not None and record["price_chaos"] > 0:
             records.append(record)
     return records
+
+
+def _history_candidates(data, league: str, category: str, is_exchange: bool) -> list[tuple[object, dict]]:
+    """Return the most liquid overview items with their normalized identities."""
+    if not isinstance(data, dict) or not isinstance(data.get("lines"), list):
+        return []
+    candidates = []
+    for line in data["lines"]:
+        record = _normalize(line, league, category, is_exchange)
+        request_id = line.get("id") if isinstance(line, dict) else None
+        if record is None or record["price_chaos"] <= 0 or not isinstance(request_id, (str, int)):
+            continue
+        rank = _finite_number(
+            line.get("volumePrimaryValue") if is_exchange else line.get("listingCount") or line.get("count"),
+            0,
+        )
+        candidates.append((float(rank or 0), request_id, record))
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    return [(request_id, record) for _, request_id, record in candidates[:HISTORY_ITEMS_PER_CATEGORY]]
+
+
+def _history_timestamp(value: object, now: datetime) -> str | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    parsed = parsed.astimezone(timezone.utc)
+    if parsed < now - timedelta(days=database.SNAPSHOT_RETENTION_DAYS) or parsed >= now:
+        return None
+    return parsed.isoformat(timespec="seconds")
+
+
+def _exchange_history_records(data, record: dict, now: datetime) -> list[tuple[str, dict]]:
+    if not isinstance(data, dict) or not isinstance(data.get("pairs"), list):
+        return []
+    pair = next(
+        (
+            value for value in data["pairs"]
+            if isinstance(value, dict) and value.get("id") == "chaos" and isinstance(value.get("history"), list)
+        ),
+        None,
+    )
+    if pair is None:
+        return []
+    records = []
+    for point in pair["history"]:
+        if not isinstance(point, dict):
+            continue
+        timestamp = _history_timestamp(point.get("timestamp"), now)
+        price = _finite_number(point.get("rate"), None)
+        volume = _finite_number(point.get("volumePrimaryValue"), 0)
+        if timestamp and price is not None and price > 0 and volume is not None:
+            records.append((timestamp, {
+                **record,
+                "price_chaos": price,
+                "volume": volume,
+                "observation_type": "IMPORTED_TRUSTED",
+                "market_timestamp": timestamp,
+            }))
+    return records
+
+
+def _stash_history_records(data, record: dict, now: datetime) -> list[tuple[str, dict]]:
+    if not isinstance(data, list):
+        return []
+    records = []
+    for point in data:
+        if not isinstance(point, dict):
+            continue
+        days_ago = point.get("daysAgo")
+        price = _finite_number(point.get("value"), None)
+        count = _finite_number(point.get("count"), 0)
+        if (
+            not isinstance(days_ago, int)
+            or isinstance(days_ago, bool)
+            or not 0 < days_ago <= database.SNAPSHOT_RETENTION_DAYS
+            or price is None
+            or price <= 0
+            or count is None
+        ):
+            continue
+        timestamp = (now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=days_ago)).isoformat(timespec="seconds")
+        records.append((timestamp, {
+            **record,
+            "price_chaos": price,
+            "volume": count,
+            "listing_count": count,
+            "observation_type": "IMPORTED_TRUSTED",
+            "market_timestamp": timestamp,
+        }))
+    return records
+
+
+async def _item_history(
+    client: httpx.AsyncClient,
+    semaphore: asyncio.Semaphore,
+    league: str,
+    category: str,
+    api_type: str,
+    request_id: object,
+    record: dict,
+    is_exchange: bool,
+    now: datetime,
+) -> list[tuple[str, dict]]:
+    url = EXCHANGE_HISTORY_URL if is_exchange else STASH_HISTORY_URL
+    async with semaphore:
+        response = await client.get(url, params={"league": league, "type": api_type, "id": request_id})
+        response.raise_for_status()
+        data = response.json()
+    return (
+        _exchange_history_records(data, record, now)
+        if is_exchange
+        else _stash_history_records(data, record, now)
+    )
+
+
+async def backfill_market_history(league: str) -> dict[str, int]:
+    """Import real daily poe.ninja history for the most liquid persisted items."""
+    global _history_status
+    now = datetime.now(timezone.utc)
+    grouped: dict[str, list[dict]] = {}
+    items_processed = 0
+    categories_processed = 0
+    semaphore = asyncio.Semaphore(4)
+    limits = httpx.Limits(max_connections=4)
+    async with httpx.AsyncClient(timeout=20.0, limits=limits) as client:
+        for category, api_type in _COLLECTION_TYPES.items():
+            is_exchange = category in _EXCHANGE_TYPES
+            overview_url = EXCHANGE_URL if is_exchange else STASH_URL
+            try:
+                response = await client.get(overview_url, params={"league": league, "type": api_type})
+                response.raise_for_status()
+                candidates = _history_candidates(response.json(), league, category, is_exchange)
+            except Exception:
+                log.exception("Failed to load history candidates for %s / %s", league, category)
+                categories_processed += 1
+                _history_status = {**_history_status, "categories_processed": categories_processed}
+                continue
+            results = await asyncio.gather(
+                *(
+                    _item_history(
+                        client, semaphore, league, category, api_type,
+                        request_id, record, is_exchange, now,
+                    )
+                    for request_id, record in candidates
+                ),
+                return_exceptions=True,
+            )
+            for result in results:
+                items_processed += 1
+                if isinstance(result, BaseException):
+                    log.warning("Failed to load one %s history item: %s", category, result)
+                    continue
+                for timestamp, record in result:
+                    grouped.setdefault(timestamp, []).append(record)
+            categories_processed += 1
+            _history_status = {
+                **_history_status,
+                "categories_processed": categories_processed,
+                "items_processed": items_processed,
+            }
+    stored = 0
+    for timestamp, records in sorted(grouped.items()):
+        stored += await database.insert_snapshots(records, timestamp)
+    if grouped and stored == 0:
+        raise RuntimeError("Market history could not be stored; check the storage limit")
+    if not grouped:
+        raise RuntimeError("poe.ninja returned no compatible market history")
+    await database.prune_market_data(PERSISTED_CATEGORIES, league=league)
+    return {
+        "categories_processed": categories_processed,
+        "items_processed": items_processed,
+        "rows_stored": stored,
+    }
+
+
+async def _run_history_backfill(league: str) -> None:
+    global _history_status
+    try:
+        result = await backfill_market_history(league)
+        _history_status = {"status": "completed", "league": league, "error": None, **result}
+    except Exception as exc:
+        log.exception("Market history backfill failed for %s", league)
+        _history_status = {**_history_status, "status": "failed", "error": str(exc)}
+
+
+async def start_market_history_backfill(league: str) -> dict:
+    """Start one process-local market history import and return immediately."""
+    global _history_task, _history_status
+    async with _history_lock:
+        if _history_task is not None and not _history_task.done():
+            return {**_history_status, "status": "in_progress"}
+        _history_status = {
+            "status": "running",
+            "league": league,
+            "categories_processed": 0,
+            "items_processed": 0,
+            "rows_stored": 0,
+            "error": None,
+        }
+        _history_task = asyncio.create_task(_run_history_backfill(league))
+        return {**_history_status, "status": "started"}
+
+
+def market_history_status() -> dict:
+    return dict(_history_status)
 
 def _trade_price(entry: dict, chaos_per_divine: float) -> tuple[float, float] | None:
     listing = entry.get("listing") if isinstance(entry, dict) else None

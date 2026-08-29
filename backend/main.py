@@ -229,8 +229,8 @@ async def update_config(request: ConfigRequest):
 @app.get("/api/categories")
 async def get_categories():
     return [
-        {"id": k, "name": v, "source": "exchange" if k in EXCHANGE_TYPES else "stash"}
-        for k, v in ALL_CATEGORIES.items()
+        {"id": k, "name": market_data.category_name(k), "source": "exchange" if k in EXCHANGE_TYPES else "stash"}
+        for k in ALL_CATEGORIES
     ]
 
 
@@ -431,6 +431,10 @@ class SnapshotRequest(BaseModel):
     category: str | None = None
 
 
+class MarketHistoryRequest(BaseModel):
+    league: str = Field(min_length=1, max_length=128)
+
+
 @app.post("/api/snapshot", dependencies=[Depends(require_local_session)])
 async def trigger_snapshot(request: SnapshotRequest):
     """Manually trigger snapshot collection for a league (optionally one category)."""
@@ -471,6 +475,17 @@ async def snapshot_status():
         "cx_retention_days": database.CX_RETENTION_DAYS,
         "persisted_categories": sorted(collector.PERSISTED_CATEGORIES),
     }
+
+
+@app.post("/api/market/history/backfill", dependencies=[Depends(require_local_session)])
+async def market_history_backfill(request: MarketHistoryRequest):
+    result = await collector.start_market_history_backfill(request.league)
+    return JSONResponse(status_code=202, content=result)
+
+
+@app.get("/api/market/history/status")
+async def market_history_backfill_status():
+    return collector.market_history_status()
 
 
 @app.get("/api/history")
