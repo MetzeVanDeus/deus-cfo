@@ -1,6 +1,8 @@
 # Changelog
 ## Unreleased
 
+## 0.5.1 — 2026-08-29
+
 ### Changed
 
 - Collapsed Shared market context after a live league is saved and limited History window to Dashboard, Signals, and Explorer.
@@ -17,6 +19,11 @@
 - Stopped Dashboard and Signals from spinning when no league is saved, and disabled Find Flips until a league exists.
 - Interpolated the Dashboard history-window metric label and rendered Profit Routes API errors with retry.
 - Removed the doubled Explorer price-change sign and stopped painting the topbar status dot as healthy when no league is configured.
+- Pinned the README CI badge to `main` so cancelled or superseded pull-request runs cannot make the repository badge appear failed while main is green.
+
+### Release
+
+- Bumped the application/frontend version to `0.5.1` for the post-0.5.0 UI correctness, accessibility, and presentation fixes.
 
 ## 0.5.0 — 2026-08-29
 
