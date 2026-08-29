@@ -19,6 +19,10 @@ def request_for_plan():
     )
 
 
+def test_capital_plan_defaults_to_seven_day_window():
+    assert request_for_plan().hours == 168
+
+
 def test_wait_plan_is_appended_and_listed(monkeypatch, tmp_path):
     monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "journal.db"))
 

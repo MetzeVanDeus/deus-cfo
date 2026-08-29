@@ -29,7 +29,7 @@ export function CFOTab({ selectedLeague }) {
   const [bankroll, setBankroll] = useState(() => readStoredObject('deuscfo.bankroll', initialBankroll))
   const [preferences, setPreferences] = useState(() => readStoredObject('deuscfo.preferences', initialPreferences))
   const [mode, setMode] = useState('PAPER')
-  const [hours, setHours] = useState(24)
+  const [hours, setHours] = useState(168)
   const [simulations, setSimulations] = useState(2000)
   const [plan, setPlan] = useState(null)
   const [loading, setLoading] = useState(false)
