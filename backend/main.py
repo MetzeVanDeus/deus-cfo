@@ -1325,27 +1325,33 @@ async def historical_performance(
 
 
 class CxBackfillRequest(BaseModel):
-    max_hours: int | None = None
+    model_config = ConfigDict(extra="forbid")
+
+    max_hours: int | None = Field(default=None, ge=1, le=168)
 
 
 @app.post("/api/cx/backfill", dependencies=[Depends(require_local_session)])
 async def cx_backfill(request: CxBackfillRequest):
-    """Backfill currency-exchange history from saved progress (or oldest)."""
+    """Start bounded Currency Exchange backfill without holding the HTTP request."""
     max_hours = request.max_hours or 168
-    hours = await cx_collector.backfill_currency_exchange(max_hours=max_hours)
-    return {"hours_processed": hours}
+    result = await cx_collector.start_backfill(max_hours=max_hours)
+    return JSONResponse(status_code=202, content=result)
 
 
 @app.post("/api/cx/poll", dependencies=[Depends(require_local_session)])
 async def cx_poll():
-    """Poll for the latest currency-exchange hour."""
+    """Poll for the latest completed currency-exchange hour."""
     stored = await cx_collector.poll_latest_cx()
     return {"entries_stored": stored}
 
 
 @app.get("/api/cx/status")
 async def cx_status():
-    return await cx_queries.cx_status()
+    result = await cx_queries.cx_status()
+    result.update(cx_collector.backfill_status())
+    return result
+
+
 
 
 @app.get("/api/cx/history")

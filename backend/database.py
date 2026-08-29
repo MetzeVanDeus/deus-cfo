@@ -770,33 +770,34 @@ async def set_cx_progress(
     first_available_hour: str | None = None,
     last_synced_hour: str | None = None,
 ) -> None:
-    """Update sync cursor. Preserves first_change_id/first_available_hour if not given."""
+    """Atomically advance sync cursor while preserving first-seen metadata."""
     db = await get_db()
     try:
-        existing = await (await db.execute(
-            "SELECT first_change_id, first_available_hour FROM cx_progress WHERE key = ?",
-            (key,),
-        )).fetchone()
-        if existing:
-            fci = first_change_id if first_change_id is not None else existing["first_change_id"]
-            fah = first_available_hour if first_available_hour is not None else existing["first_available_hour"]
-            await db.execute(
-                """UPDATE cx_progress SET
-                       last_change_id = ?, first_change_id = ?,
-                       first_available_hour = ?, last_synced_hour = ?,
-                       updated_at = ?
-                   WHERE key = ?""",
-                (change_id, fci, fah, last_synced_hour, now_iso(), key),
-            )
-        else:
-            await db.execute(
-                """INSERT INTO cx_progress
-                   (key, first_change_id, last_change_id,
-                    first_available_hour, last_synced_hour, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
-                (key, first_change_id, change_id,
-                 first_available_hour, last_synced_hour, now_iso()),
-            )
+        await db.execute(
+            """INSERT INTO cx_progress
+               (key, first_change_id, last_change_id,
+                first_available_hour, last_synced_hour, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?)
+               ON CONFLICT(key) DO UPDATE SET
+                   first_change_id = COALESCE(cx_progress.first_change_id, excluded.first_change_id),
+                   first_available_hour = COALESCE(cx_progress.first_available_hour, excluded.first_available_hour),
+                   last_change_id = CASE
+                       WHEN cx_progress.last_change_id IS NULL
+                            OR excluded.last_change_id > cx_progress.last_change_id
+                       THEN excluded.last_change_id
+                       ELSE cx_progress.last_change_id
+                   END,
+                   last_synced_hour = CASE
+                       WHEN (cx_progress.last_change_id IS NULL
+                             OR excluded.last_change_id > cx_progress.last_change_id)
+                            AND excluded.last_synced_hour IS NOT NULL
+                       THEN excluded.last_synced_hour
+                       ELSE cx_progress.last_synced_hour
+                   END,
+                   updated_at = excluded.updated_at""",
+            (key, first_change_id, change_id, first_available_hour,
+             last_synced_hour, now_iso()),
+        )
         await db.commit()
     finally:
         await db.close()

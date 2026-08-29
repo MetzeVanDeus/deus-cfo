@@ -20,6 +20,13 @@ log = logging.getLogger("deuscfo.cx")
 CX_BASE = "https://web.poecdn.com/api/currency-exchange"
 POE_NINJA_LEAGUES = "https://poe.ninja/poe1/api/economy/leagues"
 REQUEST_DELAY = 0.5  # seconds between CDN fetches
+_BACKFILL_DEFAULT_HOURS = 168
+_backfill_task: asyncio.Task[int] | None = None
+_backfill_status = "idle"
+_backfill_hours_requested = 0
+_backfill_hours_processed = 0
+_backfill_lock = asyncio.Lock()
+_last_backfill_error = False
 
 
 def _hour_cursor(hours_ago: int = 0) -> int:
@@ -142,16 +149,25 @@ async def store_cx_hour(data: dict, wanted_leagues: set[str]) -> int:
     return await database.insert_cx_hour(records, ts)
 
 
-async def backfill_currency_exchange(max_hours: int = 168) -> int:
-    """Fetch the most recent hourly currency-exchange window.
-
-    Returns the number of hours processed.
-    """
+async def backfill_currency_exchange(max_hours: int = _BACKFILL_DEFAULT_HOURS) -> int:
+    """Fetch the requested window, resuming from the saved cursor when present."""
+    global _last_backfill_error
+    _last_backfill_error = False
     wanted = await _fetch_leagues()
     if not wanted:
+        _last_backfill_error = True
         log.warning("cx backfill: no current leagues available; refusing to advance cursor")
         return 0
-    change_id = _hour_cursor(max_hours)
+    try:
+        last = await database.get_cx_progress("default")
+    except Exception:
+        _last_backfill_error = True
+        log.exception("cx backfill: progress read failed")
+        return 0
+    change_id = last if last is not None else _hour_cursor(max_hours)
+    if last is not None and last >= _hour_cursor():
+        log.info("cx backfill: already up to date at %s", last)
+        return 0
     first_change_id = None
     first_hour = None
     hours = 0
@@ -159,10 +175,12 @@ async def backfill_currency_exchange(max_hours: int = 168) -> int:
         try:
             data = await fetch_currency_exchange(change_id)
         except Exception:
+            _last_backfill_error = True
             log.exception("cx backfill: fetch failed at change_id=%s", change_id)
             break
         ncid = _valid_change_id(data)
         if ncid is None:
+            _last_backfill_error = True
             log.error("cx backfill: malformed response at change_id=%s", change_id)
             break
         if change_id is not None and ncid == change_id:
@@ -171,22 +189,24 @@ async def backfill_currency_exchange(max_hours: int = 168) -> int:
         try:
             ts, records = _parse_hour(data, wanted)
             if not ts:
+                _last_backfill_error = True
                 log.error("cx backfill: malformed hour at change_id=%s", change_id)
                 break
             if not _wanted_league_present(data, wanted) or not records:
                 log.warning("cx backfill: wanted league payload had no valid records at %s; retrying later", ncid)
                 break
             stored = await database.insert_cx_hour(records, ts) if records else 0
-            if first_change_id is None:
+            if last is None and first_change_id is None:
                 first_change_id = ncid
                 first_hour = ts
             await database.set_cx_progress(
                 "default", ncid,
-                first_change_id=first_change_id,
-                first_available_hour=first_hour,
+                first_change_id=first_change_id if last is None else None,
+                first_available_hour=first_hour if last is None else None,
                 last_synced_hour=ts,
             )
         except Exception:
+            _last_backfill_error = True
             log.exception("cx backfill: store failed at change_id=%s", ncid)
             break
         log.info("cx backfill: stored %d entries for hour %s (next=%s)", stored, ts, ncid)
@@ -195,6 +215,50 @@ async def backfill_currency_exchange(max_hours: int = 168) -> int:
         await asyncio.sleep(REQUEST_DELAY)
     log.info("cx backfill: done, %d hours processed", hours)
     return hours
+
+async def _run_backfill(max_hours: int) -> int:
+    global _backfill_status, _backfill_hours_processed, _last_backfill_error
+    _last_backfill_error = False
+    try:
+        processed = await backfill_currency_exchange(max_hours=max_hours)
+    except asyncio.CancelledError:
+        _backfill_status = "idle"
+        raise
+    except Exception:
+        log.exception("cx backfill: worker failed")
+        _backfill_status = "failed"
+        return 0
+    _backfill_hours_processed = processed
+    _backfill_status = "failed" if _last_backfill_error else "completed"
+    return processed
+
+
+
+
+async def start_backfill(max_hours: int = _BACKFILL_DEFAULT_HOURS) -> dict[str, int | str]:
+    """Start one background backfill, or report the existing worker."""
+    global _backfill_task, _backfill_status, _backfill_hours_requested, _backfill_hours_processed
+    async with _backfill_lock:
+        if _backfill_task is not None and not _backfill_task.done():
+            return {
+                "status": "in_progress",
+                "hours_requested": _backfill_hours_requested,
+                "hours_processed": _backfill_hours_processed,
+            }
+        _backfill_status = "running"
+        _backfill_hours_requested = max_hours
+        _backfill_hours_processed = 0
+        _backfill_task = asyncio.create_task(_run_backfill(max_hours))
+        return {"status": "started", "hours_requested": max_hours, "hours_processed": 0}
+
+
+def backfill_status() -> dict[str, int | str]:
+    """Return the process-local background backfill state."""
+    return {
+        "backfill_status": _backfill_status,
+        "backfill_hours_requested": _backfill_hours_requested,
+        "backfill_hours_processed": _backfill_hours_processed,
+    }
 
 
 async def poll_latest_cx() -> int:

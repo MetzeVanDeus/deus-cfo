@@ -1,6 +1,18 @@
 # Changelog
 ## Unreleased
 
+## 0.5.2 — 2026-08-29
+
+### Fixed
+
+- Returned immediately with `202` while Currency Exchange backfill runs in a singleton background worker, with status polling in the readiness UI.
+- Resumed Currency Exchange backfill from saved progress and surfaced truthful failure states, including empty league discovery, instead of reporting false completion.
+- Atomically prevented cross-process Currency Exchange cursor and last-sync regressions while preserving missing first-observation metadata.
+
+### Release
+
+- Bumped the application/frontend version to `0.5.2` for the Currency Exchange backfill reliability hotfix.
+
 ## 0.5.1 — 2026-08-29
 
 ### Changed
