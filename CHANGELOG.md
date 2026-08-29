@@ -1,6 +1,16 @@
 # Changelog
 ## Unreleased
 
+## 0.5.4 — 2026-08-29
+
+### Fixed
+
+- Distinguished an actually occupied backend port from a free localhost port whose connection probe times out, allowing packaged startup on affected Windows systems without weakening backend ownership checks.
+
+### Release
+
+- Bumped the application/frontend version to `0.5.4` for the Windows launcher port-detection hotfix.
+
 ## 0.5.3 — 2026-08-29
 
 ### Fixed
