@@ -1,6 +1,6 @@
 # DeusCFO
 
-[![CI](https://github.com/MetzeVanDeus/deus-cfo/actions/workflows/ci.yml/badge.svg)](https://github.com/MetzeVanDeus/deus-cfo/actions/workflows/ci.yml)
+[![CI](https://github.com/MetzeVanDeus/deus-cfo/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/MetzeVanDeus/deus-cfo/actions/workflows/ci.yml?query=branch%3Amain)
 
 **DeusCFO is a local Path of Exile market-research terminal that tracks historical prices, tests market signals, and identifies evidence-backed opportunities without pretending every theoretical profit is executable.** It is decision support and paper tracking, not an automated trade or gameplay tool.
 
