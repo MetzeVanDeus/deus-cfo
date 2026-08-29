@@ -182,11 +182,10 @@ def _backend_runtime_token(url, expected_version, timeout=1):
 
 
 def _listener_occupied(url):
-    parsed = urllib.parse.urlsplit(url)
-    family = socket.AF_INET6 if ":" in parsed.hostname else socket.AF_INET
-    with socket.socket(family, socket.SOCK_STREAM) as probe:
+    port = urllib.parse.urlsplit(url).port
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
         try:
-            probe.bind((parsed.hostname, parsed.port))
+            probe.bind(("127.0.0.1", port))
         except OSError:
             return True
     return False
