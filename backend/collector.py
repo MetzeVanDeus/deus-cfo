@@ -393,9 +393,13 @@ async def _run_history_backfill(league: str) -> None:
     try:
         result = await backfill_market_history(league)
         _history_status = {"status": "completed", "league": league, "error": None, **result}
-    except Exception as exc:
+    except Exception:
         log.exception("Market history backfill failed for %s", league)
-        _history_status = {**_history_status, "status": "failed", "error": str(exc)}
+        _history_status = {
+            **_history_status,
+            "status": "failed",
+            "error": "Market history import failed; retry when the upstream service is available.",
+        }
 
 
 async def start_market_history_backfill(league: str) -> dict:

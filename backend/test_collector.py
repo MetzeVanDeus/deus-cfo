@@ -215,6 +215,20 @@ def test_market_history_backfill_imports_real_daily_samples(monkeypatch):
     assert {record["category"] for _, record in inserted} == set(collector.PERSISTED_CATEGORIES)
 
 
+def test_market_history_backfill_hides_upstream_errors(monkeypatch):
+    async def fail(_league):
+        raise RuntimeError("upstream secret")
+
+    monkeypatch.setattr(collector, "backfill_market_history", fail)
+    asyncio.run(collector._run_history_backfill("Allflame"))
+
+    status = collector.market_history_status()
+    assert status["status"] == "failed"
+    assert status["error"] == (
+        "Market history import failed; retry when the upstream service is available."
+    )
+
+
 def test_category_sweep_uses_one_timestamp(monkeypatch):
     timestamps = []
 
