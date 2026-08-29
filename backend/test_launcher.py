@@ -1,4 +1,5 @@
 import json
+import socket
 import urllib.error
 
 import pytest
@@ -78,21 +79,32 @@ def test_unowned_or_mismatched_backend_refuses_without_spawn_or_browser(monkeypa
 @pytest.mark.parametrize("exc", [urllib.error.HTTPError("http://127.0.0.1:8000", 404, "not found", {}, None), TimeoutError()])
 def test_occupied_backend_error_refuses_without_spawn(monkeypatch, tmp_path, exc):
     _patch_launcher(monkeypatch, tmp_path, urlopen=lambda *_args, **_kwargs: (_ for _ in ()).throw(exc))
+    monkeypatch.setattr(deuscfo, "_listener_occupied", lambda _url: True)
     monkeypatch.setattr(deuscfo.subprocess, "Popen", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("must not spawn")))
     assert deuscfo.start() is False
 
 
-def test_free_backend_port_spawns_and_persists_runtime_token(monkeypatch, tmp_path):
-    calls = iter([ConnectionRefusedError(), _Response({"token": "new-token", "version": "0.5.3"}), _Response({"token": "new-token", "version": "0.5.3"})])
+@pytest.mark.parametrize("initial_error", [ConnectionRefusedError(), TimeoutError()])
+def test_free_backend_port_spawns_and_persists_runtime_token(monkeypatch, tmp_path, initial_error):
+    calls = iter([initial_error, _Response({"token": "new-token", "version": "0.5.3"}), _Response({"token": "new-token", "version": "0.5.3"})])
     def urlopen(*_args, **_kwargs):
         value = next(calls)
         if isinstance(value, BaseException):
             raise value
         return value
     saved = _patch_launcher(monkeypatch, tmp_path, urlopen=urlopen)
+    monkeypatch.setattr(deuscfo, "_listener_occupied", lambda _url: False)
     monkeypatch.setattr(deuscfo.subprocess, "Popen", lambda *_args, **_kwargs: _Process())
     assert deuscfo.start() is True
     assert saved[-1] == ("prod", {"backend": 4321}, "new-token")
+
+def test_listener_occupancy_uses_bind_state():
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        host, port = listener.getsockname()
+        url = f"http://{host}:{port}"
+        assert deuscfo._listener_occupied(url) is True
+    assert deuscfo._listener_occupied(url) is False
 
 
 def test_failed_readiness_cleans_only_new_processes(monkeypatch, tmp_path):
@@ -113,6 +125,7 @@ def test_dev_unowned_frontend_listener_refuses_before_spawn(monkeypatch, tmp_pat
             return _Response({})
         raise ConnectionRefusedError()
     _patch_launcher(monkeypatch, tmp_path, {"mode": "dev", "pids": {}}, urlopen)
+    monkeypatch.setattr(deuscfo, "_listener_occupied", lambda _url: True)
     monkeypatch.setattr(deuscfo.subprocess, "Popen", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("must not spawn")))
     assert deuscfo.start("dev") is False
 

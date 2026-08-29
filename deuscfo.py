@@ -9,9 +9,11 @@ import os
 import re
 import shutil
 import subprocess
+import socket
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import webbrowser
 from pathlib import Path
@@ -159,7 +161,7 @@ def _backend_probe(url, timeout=1):
             return None, None
         if isinstance(exc, urllib.error.URLError) and isinstance(exc.reason, ConnectionRefusedError):
             return None, None
-        return False, None
+        return (False if _listener_occupied(url) else None), None
     return True, payload if isinstance(payload, dict) else None
 
 
@@ -179,18 +181,15 @@ def _backend_runtime_token(url, expected_version, timeout=1):
     return None
 
 
-def _listener_occupied(url, timeout=1):
-    try:
-        with urllib.request.urlopen(url, timeout=timeout) as response:
+def _listener_occupied(url):
+    parsed = urllib.parse.urlsplit(url)
+    family = socket.AF_INET6 if ":" in parsed.hostname else socket.AF_INET
+    with socket.socket(family, socket.SOCK_STREAM) as probe:
+        try:
+            probe.bind((parsed.hostname, parsed.port))
+        except OSError:
             return True
-    except urllib.error.HTTPError:
-        return True
-    except OSError as exc:
-        if isinstance(exc, ConnectionRefusedError):
-            return False
-        if isinstance(exc, urllib.error.URLError) and isinstance(exc.reason, ConnectionRefusedError):
-            return False
-        return True
+    return False
 
 
 def _ready(url, pid=None, timeout=1, expected_version=None, expected_token=None):
