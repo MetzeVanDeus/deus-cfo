@@ -194,8 +194,8 @@ class ConfigRequest(BaseModel):
 
 @app.get("/api/session")
 async def get_session(request: Request):
-    """Return the process-local token only after local host/origin middleware approval."""
-    return {"token": SESSION_TOKEN}
+    """Return the process-local token and runtime version after host approval."""
+    return {"token": SESSION_TOKEN, "version": updates.read_current_version()}
 
 
 @app.get("/api/config")
