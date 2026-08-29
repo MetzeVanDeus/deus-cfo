@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api, fmtPrice } from '../lib/helpers'
-import { EmptyState, LoadingState } from './ui'
+import { EmptyState, ErrorState, LoadingState, LeagueEmpty } from './ui'
 
 const value = (item) => {
   if (item == null || item === '') return '—'
@@ -53,8 +53,9 @@ export function ProfitRoutesTab({ categories = [], selectedLeague }) {
   return <div className="terminal-page">
     <div className="page-head"><div><div className="eyebrow">MONEY PRINTER / CAPITAL DEPLOYMENT</div><h1>Profit Routes</h1><p className="muted">Production coverage is intentionally narrow: Doctor → Headhunter is the only accepted route today. Assembly, vendor, graph, six-link, and other families remain unsupported until verified records exist. Theoretical routes stay visible when executable liquidity evidence or positive net profit is not verified.</p></div></div>
     <form className="terminal-panel strategy-form" onSubmit={(event) => { event.preventDefault(); setRequestPlan({ ...planner }) }}><div className="form-row form-row-main"><label className="field"><span>Category</span><select className="input" value={category} onChange={(event) => setCategory(event.target.value)}><option value="">All categories</option>{categories.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label className="field"><span>Budget (Chaos)</span><input className="input numeric" type="number" min="0.000001" step="any" value={planner.budget} onChange={(event) => setPlanner((current) => ({ ...current, budget: event.target.value }))} placeholder="Optional" /></label><label className="field"><span>Horizon (hours)</span><input required className="input numeric" type="number" min="0.000001" step="any" value={planner.horizon} onChange={(event) => setPlanner((current) => ({ ...current, horizon: event.target.value }))} /></label><button className="btn-primary" disabled={loading || !selectedLeague}>PLAN MANUAL BATCH</button></div></form>
-    {!selectedLeague && <div className="terminal-panel"><EmptyState title="Select a league" message="Profit routes wait for a selected league before requesting market data." /></div>}
+    {!selectedLeague && <div className="terminal-panel"><LeagueEmpty /></div>}
     {selectedLeague && loading && <div className="terminal-panel"><LoadingState text="Loading profit routes…" /></div>}
+    {selectedLeague && !loading && error && <div className="terminal-panel"><ErrorState message={error} onRetry={() => setRequestPlan({ ...requestPlan })} /></div>}
     {selectedLeague && !loading && !error && patch.status !== 'resolved' && patch.reasons.length > 0 && <div className="terminal-panel"><div className="panel-title"><h2>Patch verification blocked</h2><span>STATUS · {patch.status.toUpperCase()}</span></div><ul className="dense-list">{patch.reasons.map((reason, index) => <li key={index}><span className="signal-mark" />{reason}</li>)}</ul></div>}
     {selectedLeague && !loading && !error && patch.status === 'resolved' && !routes.length && <div className="terminal-panel"><EmptyState title="No route evidence" message="No registered provider has enough market data to describe a route for this league and category." /></div>}
     {selectedLeague && !loading && !error && routes.length > 0 && <div className="profit-routes">{routes.map((route, index) => <RouteCard key={route.transformation_id || index} route={route} />)}</div>}

@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react'
 import { api, fmtPrice, fmtVol, fmtPct, fmtTime } from '../lib/helpers'
-import { LoadingState, EmptyState, ErrorState, ConfidenceBar, SignalBadge } from './ui'
+import { LoadingState, EmptyState, ErrorState, ConfidenceBar, SignalBadge, LeagueEmpty } from './ui'
 export function ExplorerTab({ categories, selectedLeague, historyHours = 24 }) {
   const [selectedCategory, setSelectedCategory] = useState('Currency')
   const [items, setItems] = useState([])
@@ -73,16 +73,18 @@ export function ExplorerTab({ categories, selectedLeague, historyHours = 24 }) {
           </div>
           <div>
             <label className="block text-sm font-medium text-dracula-comment mb-2">Item</label>
-            <select value={selectedItem} onChange={(e) => setSelectedItem(e.target.value)} className="input w-full" disabled={loadingItems || items.length === 0}>
+            <select value={selectedItem} onChange={(e) => setSelectedItem(e.target.value)} className="input w-full" disabled={loadingItems || items.length === 0 || !selectedLeague}>
               {loadingItems && <option>Loading items...</option>}
-              {!loadingItems && items.length === 0 && <option>No items in category</option>}
+              {!loadingItems && !selectedLeague && <option>Save a live league first</option>}
+              {!loadingItems && selectedLeague && items.length === 0 && <option>No items in category</option>}
               {!loadingItems && items.map(i => <option key={i.item_id} value={i.item_id}>{i.item_name}{i.variant ? ` (${i.variant})` : ''}</option>)}
             </select>
           </div>
         </div>
       </div>
       {itemsError && !loadingItems && <ErrorState message={itemsError} onRetry={() => window.location.reload()} />}
-      {!selectedItem && !loadingItems && !itemsError && (
+      {!selectedLeague && <LeagueEmpty />}
+      {selectedLeague && !selectedItem && !loadingItems && !itemsError && (
         <EmptyState title="Select an Item" message="Choose a category and item above to see price history, regime, and statistics." />
       )}
       {loadingDetail && <LoadingState text="Loading item data..." />}
@@ -118,7 +120,6 @@ function PriceCard({ history, itemData }) {
           <div className="text-sm text-dracula-comment">chaos</div>
         </div>
         <div className={`flex items-center gap-1 text-lg font-semibold mb-1 ${isUp ? 'text-dracula-green' : 'text-dracula-red'}`}>
-          <span>{isUp ? '+' : '-'}</span>
           <span>{fmtPct(changePct)}</span>
         </div>
       </div>
