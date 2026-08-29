@@ -1,6 +1,22 @@
 # Changelog
 ## Unreleased
 
+## 0.5.6 — 2026-08-29
+
+### Added
+
+- Imported real daily poe.ninja history for the 20 most liquid items in every persisted category, making signals useful on first launch while live snapshots continue accumulating.
+
+### Fixed
+
+- Updated poe.ninja category request types to the current singular API contract; plural display labels were returning empty market data for every persisted category except Currency.
+- Defaulted analysis to the imported seven-day window and based readiness on the five real samples required by signal detectors instead of waiting for 24 hourly snapshots.
+
+### Release
+
+- Bumped the application/frontend version to `0.5.6` for the immediate market-history hotfix.
+
+
 ## 0.5.5 — 2026-08-29
 
 ### Fixed

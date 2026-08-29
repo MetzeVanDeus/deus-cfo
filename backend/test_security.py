@@ -48,6 +48,7 @@ def test_mutation_and_collection_require_session_token(client):
     assert client.post("/api/cx/poll", headers=headers).status_code == 403
     assert client.post("/api/cx/backfill", json={"max_hours": 1}, headers=headers).status_code == 403
     assert client.post("/api/snapshot", json={"league": "Allflame"}, headers=headers).status_code == 403
+    assert client.post("/api/market/history/backfill", json={"league": "Allflame"}, headers=headers).status_code == 403
     assert client.post("/api/update/check", headers=headers).status_code == 403
 
 
@@ -81,6 +82,21 @@ def test_backfill_starts_without_waiting_for_worker(monkeypatch, client):
     assert response.status_code == 202
     assert response.json() == {"status": "started", "hours_requested": 2, "hours_processed": 0}
     assert calls == [2]
+
+
+def test_market_history_backfill_starts_without_waiting(monkeypatch, client):
+    async def start(league):
+        return {"status": "started", "league": league, "rows_stored": 0}
+
+    monkeypatch.setattr(main.collector, "start_market_history_backfill", start)
+    session = client.get("/api/session", headers=local_headers()).json()["token"]
+    response = client.post(
+        "/api/market/history/backfill",
+        json={"league": "Allflame"},
+        headers={**local_headers(), "X-DeusCFO-Token": session},
+    )
+    assert response.status_code == 202
+    assert response.json() == {"status": "started", "league": "Allflame", "rows_stored": 0}
 
 
 def test_backfill_rejects_unbounded_hours(client):
