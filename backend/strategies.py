@@ -1053,7 +1053,7 @@ def evaluate_deterministic_batch_ladder(
                     if ladder:
                         ladder[-1]["binding_constraint"] = "output_depth"
                     break
-                output_value += fill[0] * (1 - float(quote["fee"])) * (1 - float(output_discount_rate))
+                output_value += fill[0] * (1 - float(quote["fee"])) * (1 - float(output_discount_rate)) * (1 - float(sale_fee_rate))
                 output_fills.append(fill[0])
             else:
                 net = output_value - input_cost
@@ -1976,6 +1976,9 @@ class ArbitrageGraphStrategyProvider:
                 synthetic = {
                     **first, "id": "graph:" + ":".join(edge["id"] for edge in path), "name": " → ".join(edge["name"] for edge in path),
                     "strategy_family": "bounded_arbitrage_graph", "conversion_costs": conversion_costs, "friction_chaos": friction,
+                    "sale_fee_rate": float(last.get("sale_fee_rate", 0)),
+                    "output_discount_rate": float(last.get("output_discount_rate", 0)),
+                    "strategy_confidence": min(float(edge.get("strategy_confidence", 1.0)) for edge in path),
                     "expected_execution_time_hours": sum(float(edge.get("active_effort_hours", edge["expected_execution_time_hours"])) * scale for edge, scale in zip(path, scale_values, strict=True)),
                     "expected_sale_time_hours": sum(float(edge.get("expected_sale_time_hours", 0)) for edge in path), "max_batch": route_max_batch,
                     "manual_actions": [action for edge in path for action in edge.get("manual_actions", [])],
@@ -2072,7 +2075,7 @@ class DeferredDeterministicStrategyProvider:
             opportunities.extend(provider.discover(context))
         return opportunities
 
-    def readiness(self, context: Mapping[str, Any]) -> dict[str, Any]:
+    def readiness(self, context: Mapping[str, Any], *, routes: Sequence[ProfitRoute] | None = None) -> dict[str, Any]:
         if self.envelope is not None:
             report = self.envelope.health_report(context)
         else:
@@ -2085,16 +2088,19 @@ class DeferredDeterministicStrategyProvider:
                 report["families"][family] = {"accepted_count": len(accepted), "rejected_count": 0, "rejected": [],
                                                "state": "awaiting_market_data" if accepted and missing else "theoretical_only" if accepted else "unsupported_empty",
                                                "reasons": ["missing exact market keys: " + ", ".join(missing)] if missing else [] if accepted else [f"no verified {family} production definitions"]}
-        family_routes = {
-            "assembly": AssemblyStrategyProvider(self.assembly).evaluate(context),
-            "vendor": VendorTransformationStrategyProvider(self.vendor).evaluate(context),
-            "six_link": DeterministicSixLinkStrategyProvider(self.six_link).evaluate(context),
-        }
-        for family, routes in family_routes.items():
+        family_routes = (
+            {family: [route for route in routes if route.strategy_family == family] for family in ("assembly", "vendor", "six_link")}
+            if routes is not None else {
+                "assembly": AssemblyStrategyProvider(self.assembly).evaluate(context),
+                "vendor": VendorTransformationStrategyProvider(self.vendor).evaluate(context),
+                "six_link": DeterministicSixLinkStrategyProvider(self.six_link).evaluate(context),
+            }
+        )
+        for family, family_items in family_routes.items():
             item = report["families"][family]
-            if routes and any(route.market_capacity > 0 for route in routes):
+            if family_items and any(route.market_capacity > 0 for route in family_items):
                 item["state"] = "ready"
-            elif routes and item["state"] != "awaiting_market_data":
+            elif family_items and item["state"] != "awaiting_market_data":
                 item["state"] = "theoretical_only"
         if "exact base/linked identity evidence" not in " ".join(report["families"]["six_link"]["reasons"]):
             report["families"]["six_link"]["reasons"].append("exact base/linked identity evidence is unavailable; six-link production remains blocked")

@@ -122,6 +122,29 @@ def test_graph_scales_fixed_ratios_for_a_short_chain():
         context(("Currency:A", 2, "A"), ("Currency:C", 30, "A"))
     ) == []
 
+def test_graph_uses_terminal_liquidation_rates_and_weakest_confidence():
+    first = vendor_record("a-to-b-rates", "A", "B")
+    first.update({"sale_fee_rate": 0.1, "strategy_confidence": 0.9})
+    second = vendor_record("b-to-c-rates", "B", "C")
+    second.update({"sale_fee_rate": 0.5, "output_discount_rate": 0.2, "strategy_confidence": 0.5})
+    routes = ArbitrageGraphStrategyProvider(VendorTransformationRegistry([first, second]), min_edges=2).evaluate(
+        context(("Currency:A", 2, "A"), ("Currency:C", 100, "A"))
+    )
+    route = next(route for route in routes if route.verification_metadata["graph_edges"] == ["a-to-b-rates", "b-to-c-rates"])
+    assert route.theoretical_net_profit == pytest.approx(38)
+    assert route.strategy_confidence == pytest.approx(0.5)
+
+def test_deterministic_ladder_applies_sale_fee_to_safe_net():
+    kwargs = {
+        "inputs": [{"quantity": 1}], "conversion_costs": [], "outputs": [{"quantity": 1}],
+        "input_quotes": [{"levels": [{"price": 9, "quantity": 1}], "fee": 0}],
+        "cost_quotes": [], "output_quotes": [{"levels": [{"price": 10, "quantity": 1}], "fee": 0}],
+        "max_batch": 1, "budget_chaos": 0, "time_horizon_hours": 24, "capital_lock_time": 1,
+    }
+    assert evaluate_deterministic_batch_ladder(**kwargs)[0]["safe_net_chaos"] == pytest.approx(1)
+    assert evaluate_deterministic_batch_ladder(**kwargs, sale_fee_rate=0.2) == []
+
+
 
 def six_link_record():
     return {
@@ -225,8 +248,18 @@ def test_deferred_routes_are_wired_into_profit_routes_without_touching_div_cards
         vendor=VendorTransformationRegistry([vendor_record("a-to-b", "Currency:A", "Currency:B", cost=1)])
     )
     monkeypatch.setattr(main.strategies, "default_deferred_strategy_provider", lambda: provider)
+    calls = 0
+    original_evaluate = main.strategies.VendorTransformationStrategyProvider.evaluate
+
+    def counted_evaluate(self, context):
+        nonlocal calls
+        calls += 1
+        return original_evaluate(self, context)
+
+    monkeypatch.setattr(main.strategies.VendorTransformationStrategyProvider, "evaluate", counted_evaluate)
     result = asyncio.run(main.get_profit_routes("Test", category="VendorTransformation"))
     assert any(route["transformation_id"] == "a-to-b" for route in result["routes"])
+    assert calls == 1
 def test_profit_routes_readiness_reports_populated_missing_market(monkeypatch):
     async def latest(_league):
         return {"Currency": [row("Currency:A", 5)]}
