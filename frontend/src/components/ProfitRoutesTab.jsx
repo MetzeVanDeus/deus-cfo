@@ -12,9 +12,12 @@ const value = (item) => {
 const ratioPercent = (item) => item == null ? '—' : `${(Number(item) * 100).toFixed(1)}%`
 const tone = (item) => Number(item) < 0 ? 'negative' : 'positive'
 const list = (items) => Array.isArray(items) ? items : items == null ? [] : [items]
+const familyLabels = { assembly: 'Assembly', vendor: 'Vendor', six_link: 'Six-link' }
+const readinessFamilies = (readiness) => readiness && typeof readiness === 'object' && readiness.families && typeof readiness.families === 'object' ? readiness.families : {}
 
 export function ProfitRoutesTab({ categories = [], selectedLeague }) {
   const [routes, setRoutes] = useState([])
+  const [readiness, setReadiness] = useState(null)
   const [category, setCategory] = useState('')
   const [planner, setPlanner] = useState({ budget: '', horizon: '24' })
   const [requestPlan, setRequestPlan] = useState({ budget: '', horizon: '24' })
@@ -25,7 +28,7 @@ export function ProfitRoutesTab({ categories = [], selectedLeague }) {
     let cancelled = false
     if (!selectedLeague) {
       setRoutes([])
-      setPatch({ status: '', reasons: [] })
+      setReadiness(null)
       setError('')
       setLoading(false)
       return () => { cancelled = true }
@@ -40,6 +43,7 @@ export function ProfitRoutesTab({ categories = [], selectedLeague }) {
       .then(({ data }) => {
         if (cancelled) return
         setRoutes(Array.isArray(data) ? data : data?.routes || [])
+        setReadiness(data?.deterministic_readiness && typeof data.deterministic_readiness === 'object' ? data.deterministic_readiness : null)
         setPatch({
           status: data?.patch_status || '',
           reasons: Array.isArray(data?.patch_reasons) ? data.patch_reasons : [],
@@ -51,17 +55,23 @@ export function ProfitRoutesTab({ categories = [], selectedLeague }) {
   }, [selectedLeague, category, requestPlan])
 
   return <div className="terminal-page">
-    <div className="page-head"><div><div className="eyebrow">RESEARCH / ROUTES</div><h1>Profit Routes</h1><p className="muted">Production coverage is intentionally narrow: Doctor → Headhunter is the only accepted route today. Assembly, vendor, graph, six-link, and other families remain unsupported until verified records exist. Theoretical routes stay visible when executable liquidity evidence or positive net profit is not verified.</p></div></div>
-    <form className="terminal-panel strategy-form" onSubmit={(event) => { event.preventDefault(); setRequestPlan({ ...planner }) }}><div className="form-row form-row-main"><label className="field"><span>Category</span><select className="input" value={category} onChange={(event) => setCategory(event.target.value)}><option value="">All registered families</option>{categories.filter((item) => item.id === 'DivinationCard').map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label className="field"><span>Budget (Chaos)</span><input className="input numeric" type="number" min="0.000001" step="any" value={planner.budget} onChange={(event) => setPlanner((current) => ({ ...current, budget: event.target.value }))} placeholder="Optional" /></label><label className="field"><span>Horizon (hours)</span><input required className="input numeric" type="number" min="0.000001" step="any" value={planner.horizon} onChange={(event) => setPlanner((current) => ({ ...current, horizon: event.target.value }))} /></label><button className="btn-primary" disabled={loading || !selectedLeague}>PLAN MANUAL BATCH</button></div><p className="muted small">Only the verified Doctor → Headhunter route is registered; other categories have no provider.</p></form>
+    <div className="page-head"><div><div className="eyebrow">RESEARCH / ROUTES</div><h1>Profit Routes</h1><p className="muted">Routes are shown only when their definitions and market evidence meet the backend’s verification rules. Theoretical routes remain visible when executable liquidity or positive net profit is not verified.</p></div></div>
+    <form className="terminal-panel strategy-form" onSubmit={(event) => { event.preventDefault(); setRequestPlan({ ...planner }) }}><div className="form-row form-row-main"><label className="field"><span>Category</span><select className="input" value={category} onChange={(event) => setCategory(event.target.value)}><option value="">All registered families</option>{categories.filter((item) => item.id === 'DivinationCard').map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label className="field"><span>Budget (Chaos)</span><input className="input numeric" type="number" min="0.000001" step="any" value={planner.budget} onChange={(event) => setPlanner((current) => ({ ...current, budget: event.target.value }))} placeholder="Optional" /></label><label className="field"><span>Horizon (hours)</span><input required className="input numeric" type="number" min="0.000001" step="any" value={planner.horizon} onChange={(event) => setPlanner((current) => ({ ...current, horizon: event.target.value }))} /></label><button className="btn-primary" disabled={loading || !selectedLeague}>PLAN MANUAL BATCH</button></div><p className="muted small">Provider coverage and evidence status are shown below from the backend registry.</p></form>
     {!selectedLeague && <div className="terminal-panel"><LeagueEmpty /></div>}
     {selectedLeague && loading && <div className="terminal-panel"><LoadingState text="Loading profit routes…" /></div>}
     {selectedLeague && !loading && error && <div className="terminal-panel"><ErrorState message={error} onRetry={() => setRequestPlan({ ...requestPlan })} /></div>}
     {selectedLeague && !loading && !error && patch.status !== 'resolved' && patch.reasons.length > 0 && <div className="terminal-panel warning-panel"><div className="panel-title"><h2>Patch verification blocked</h2><span>STATUS · {patch.status.toUpperCase()}</span></div><ul className="dense-list">{patch.reasons.map((reason, index) => <li key={index}><span className="signal-mark" />{reason}</li>)}</ul></div>}
+    {selectedLeague && !loading && !error && readiness && <DeterministicReadiness readiness={readiness} />}
     {selectedLeague && !loading && !error && patch.status === 'resolved' && !routes.length && <div className="terminal-panel"><EmptyState title="No route evidence" message="No registered provider has enough market data to describe a route for this league and category." /></div>}
     {selectedLeague && !loading && !error && routes.length > 0 && <div className="profit-routes">{routes.map((route, index) => <RouteCard key={route.transformation_id || index} route={route} />)}</div>}
   </div>
 }
 
+function DeterministicReadiness({ readiness }) {
+  const families = readinessFamilies(readiness)
+  const registry = readiness.registry && typeof readiness.registry === 'object' ? readiness.registry : readiness
+  return <section className="terminal-panel" aria-labelledby="deterministic-readiness-heading"><div className="panel-title"><h2 id="deterministic-readiness-heading">Deterministic provider readiness</h2><span>{registry?.version ? `REGISTRY · ${registry.version}` : 'BACKEND STATUS'}</span></div>{(registry?.source || registry?.poe_patch) && <p className="muted small">Source: {registry.source || '—'} · PoE patch: {registry.poe_patch || '—'}</p>}<div className="metric-grid">{Object.entries(familyLabels).map(([key, label]) => { const family = families[key]; if (!family || typeof family !== 'object') return null; const reasons = Array.isArray(family.reasons) ? family.reasons : []; return <div className="metric" key={key}><span>{label}</span><strong>{family.state || '—'}</strong><small>{Number.isFinite(Number(family.accepted_count)) ? `${family.accepted_count} accepted · ${family.rejected_count || 0} rejected` : 'Counts unavailable'}</small>{reasons.length > 0 && <ul className="dense-list">{reasons.map((reason, index) => <li key={index}><span className="signal-mark" />{String(reason)}</li>)}</ul>}</div> })}</div></section>
+}
 function RouteCard({ route }) {
   const units = route.capacity_units || 'capital'
   return <article className="terminal-panel profit-route">

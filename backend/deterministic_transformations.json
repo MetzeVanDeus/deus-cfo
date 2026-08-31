@@ -1,0 +1,13 @@
+{
+  "version": "phase2-production-v1",
+  "source": "evidence-blocked: no authoritative checked-in conversion recipe",
+  "poe_patch": "unverified",
+  "assembly": [],
+  "vendor": [],
+  "six_link": [],
+  "blockers": {
+    "assembly": ["no authoritative checked-in assembly or disassembly conversion recipe"],
+    "vendor": ["no authoritative checked-in vendor or fixed-conversion recipe"],
+    "six_link": ["exact base/linked market identity cannot be established from the checked-in data source"]
+  }
+}

@@ -95,7 +95,7 @@ The collector first gathers current poe.ninja snapshots. Historical views become
 
 ## Current strategy promise
 
-Production transformation coverage is intentionally narrow: the verified route is **The Doctor → Headhunter** for the patch and leagues declared in `backend/div_card_recipes.json`. Assembly/disassembly, vendor chains, graph routes, six-link routes, and other strategy families have no accepted production records. They remain visibly unsupported rather than being filled with speculative recipes.
+Production transformation coverage includes the verified **The Doctor → Headhunter** divination-card route for the patch and leagues declared in `backend/div_card_recipes.json`. Assembly/disassembly, vendor chains, graph routes, and six-link routes are evaluated through the existing deterministic providers; their registry readiness, evidence state, and blockers are reported by the Profit Routes API and UI. No unsupported definition is presented as a production route.
 
 A route can remain theoretical or be absent when exact prices, buy-side depth, historical evidence, patch metadata, or liquidation evidence are missing. Headhunter sell depth is never inferred from seller asks. The application never executes trades.
 

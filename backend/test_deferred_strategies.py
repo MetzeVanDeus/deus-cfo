@@ -1,4 +1,6 @@
 import asyncio
+import json
+from strategies import evaluate_deterministic_batch_ladder, load_deterministic_registry_envelope
 
 import pytest
 
@@ -106,6 +108,7 @@ def test_graph_scales_fixed_ratios_for_a_short_chain():
     first["inputs"][0]["quantity"] = 3
     second = vendor_record("three-b-to-c", "B", "C")
     second["inputs"][0]["quantity"] = 3
+    first["max_batch"] = 3
     vendor = VendorTransformationRegistry([first, second])
     routes = ArbitrageGraphStrategyProvider(vendor, min_edges=2).evaluate(
         context(("Currency:A", 2, "A"), ("Currency:C", 30, "A"))
@@ -114,6 +117,10 @@ def test_graph_scales_fixed_ratios_for_a_short_chain():
     assert route.inputs[0]["quantity"] == 9
     assert route.outputs[0]["quantity"] == 1
     assert route.total_input_cost == pytest.approx(18)
+    first["max_batch"] = 1
+    assert ArbitrageGraphStrategyProvider(VendorTransformationRegistry([first, second]), min_edges=2).evaluate(
+        context(("Currency:A", 2, "A"), ("Currency:C", 30, "A"))
+    ) == []
 
 
 def six_link_record():
@@ -180,6 +187,28 @@ def test_graph_rejects_incompatible_edge_metadata(field, first_value, second_val
     ) == []
 
 
+def test_production_envelope_is_strict_and_default_is_explicitly_empty(tmp_path):
+    envelope = main.strategies.default_deterministic_registry_envelope()
+    report = envelope.health_report()
+    assert all(report["families"][family]["accepted_count"] == 0 for family in ("assembly", "vendor", "six_link"))
+    assert "exact base/linked identity" in " ".join(report["families"]["six_link"]["reasons"])
+    payload = {"version": "v1", "source": "s", "poe_patch": "3.29", "assembly": [], "vendor": [], "six_link": []}
+    path = tmp_path / "bad.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ValueError, match="version, source"):
+        load_deterministic_registry_envelope(path)
+
+
+def test_deterministic_ladder_consumes_depth_and_blocks_missing_output():
+    ladder = evaluate_deterministic_batch_ladder(
+        inputs=[{"quantity": 1}], conversion_costs=[], outputs=[{"quantity": 1}],
+        input_quotes=[{"levels": [{"price": 1, "quantity": 1}, {"price": 10, "quantity": 1}], "fee": 0}],
+        cost_quotes=[], output_quotes=[{"levels": [{"price": 20, "quantity": 2}], "fee": 0}],
+        max_batch=3, budget_chaos=0, time_horizon_hours=24, capital_lock_time=1,
+    )
+    assert [entry["batch_size"] for entry in ladder] == [1, 2]
+    assert ladder[1]["roi"] < ladder[0]["roi"]
+
 def test_default_deferred_registries_fail_closed():
     provider = main.strategies.default_deferred_strategy_provider()
     assert provider.evaluate({"prices": {}, "price_records": {}}) == []
@@ -198,3 +227,17 @@ def test_deferred_routes_are_wired_into_profit_routes_without_touching_div_cards
     monkeypatch.setattr(main.strategies, "default_deferred_strategy_provider", lambda: provider)
     result = asyncio.run(main.get_profit_routes("Test", category="VendorTransformation"))
     assert any(route["transformation_id"] == "a-to-b" for route in result["routes"])
+def test_profit_routes_readiness_reports_populated_missing_market(monkeypatch):
+    async def latest(_league):
+        return {"Currency": [row("Currency:A", 5)]}
+    monkeypatch.setattr(main.market_data, "get_all_latest", latest)
+    monkeypatch.setattr(main, "resolve_active_poe_patch", lambda _league: asyncio.sleep(0, result="3.29.0"))
+    provider = main.strategies.DeferredDeterministicStrategyProvider(
+        vendor=VendorTransformationRegistry([vendor_record("a-to-b", "A", "B")])
+    )
+    monkeypatch.setattr(main.strategies, "default_deferred_strategy_provider", lambda: provider)
+    result = asyncio.run(main.get_profit_routes("Test", category="VendorTransformation"))
+    readiness = result["deterministic_readiness"]["families"]["vendor"]
+    assert readiness["accepted_count"] == 1
+    assert readiness["state"] == "awaiting_market_data"
+    assert "Currency:B" in readiness["reasons"][0]
