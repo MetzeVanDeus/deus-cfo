@@ -1,5 +1,20 @@
 # Changelog
 ## Unreleased
+## 0.6.0 — 2026-08-31
+
+### Added
+
+- Added a strict, versioned deterministic-transformation registry envelope and per-family readiness reporting for assembly, vendor, and six-link providers.
+- Added cumulative market-depth and bounded batch evaluation that accounts for conversion costs, fees, friction, ratios, budget, horizon, and stale or missing liquidity evidence.
+- Added Profit Routes UI rendering for deterministic registry metadata, family states, and backend-provided blocker reasons.
+
+### Changed
+
+- Kept unsupported production transformation arrays empty until authoritative conversion recipes and exact six-link identity evidence are available.
+
+### Release
+
+- Bumped the application/frontend version to `0.6.0` for the Phase 2 deterministic-provider readiness feature.
 
 ## 0.5.7 — 2026-08-29
 

@@ -1041,7 +1041,9 @@ async def get_profit_routes(
     routes = list(strategies.TransformationStrategyProvider(
         strategies.default_transformation_registry()
     ).evaluate(context))
-    routes.extend(strategies.default_deferred_strategy_provider().evaluate(context))
+    deferred_provider = strategies.default_deferred_strategy_provider()
+    routes.extend(deferred_provider.evaluate(context))
+    deterministic_readiness = deferred_provider.readiness(context)
     div_registry = strategies.default_div_card_registry() if category in (None, "DivinationCard") else None
     registry_health = (
         div_registry.health_report(
@@ -1086,6 +1088,7 @@ async def get_profit_routes(
         "poe_patch": active_poe_patch,
         "patch_status": patch_status,
         "patch_reasons": patch_reasons,
+        "deterministic_readiness": deterministic_readiness,
         "routes": [route.model_dump() for route in sorted(
             routes,
             key=lambda route: (

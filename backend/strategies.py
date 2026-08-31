@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 from dataclasses import dataclass
+from fractions import Fraction
 from datetime import datetime, timedelta, timezone
 from enum import StrEnum
 from pathlib import Path
@@ -1000,6 +1001,80 @@ def evaluate_batch_ladder(
             "binding_constraint": "recipe_max_batch",
         })
     return ladder
+def evaluate_deterministic_batch_ladder(
+    *,
+    inputs: Sequence[Mapping[str, Any]],
+    conversion_costs: Sequence[Mapping[str, Any]],
+    outputs: Sequence[Mapping[str, Any]],
+    input_quotes: Sequence[Mapping[str, Any] | None],
+    cost_quotes: Sequence[Mapping[str, Any] | None],
+    output_quotes: Sequence[Mapping[str, Any] | None],
+    max_batch: int,
+    budget_chaos: float,
+    time_horizon_hours: float,
+    capital_lock_time: float,
+    sale_fee_rate: float = 0.0,
+    output_discount_rate: float = 0.0,
+    friction_chaos: float = 0.0,
+) -> list[dict[str, Any]]:
+    """Consume every deterministic leg cumulatively for each complete batch."""
+    legs = [*zip(inputs, input_quotes, strict=True), *zip(conversion_costs, cost_quotes, strict=True)]
+    if not legs or len(outputs) != len(output_quotes) or any(quote is None for _, quote in legs) or any(
+        quote is None for quote in output_quotes
+    ):
+        return []
+    ladder: list[dict[str, Any]] = []
+    for batch_size in range(1, max(0, int(max_batch)) + 1):
+        input_cost = 0.0
+        input_fills: list[float] = []
+        for component, quote in legs:
+            fill = _consume_depth(quote["levels"], batch_size * float(component["quantity"]), buy=True)
+            if fill is None:
+                if ladder:
+                    ladder[-1]["binding_constraint"] = "input_depth"
+                break
+            input_cost += fill[0] * (1 + float(quote["fee"]))
+            input_fills.append(fill[0])
+        else:
+            input_cost += batch_size * float(friction_chaos)
+            if budget_chaos > 0 and input_cost > budget_chaos + 1e-9:
+                if ladder:
+                    ladder[-1]["binding_constraint"] = "budget"
+                break
+            if batch_size * capital_lock_time > time_horizon_hours + 1e-9:
+                if ladder:
+                    ladder[-1]["binding_constraint"] = "time_horizon"
+                break
+            output_value = 0.0
+            output_fills: list[float] = []
+            for component, quote in zip(outputs, output_quotes, strict=True):
+                fill = _consume_depth(quote["levels"], batch_size * float(component["quantity"]), buy=False)
+                if fill is None:
+                    if ladder:
+                        ladder[-1]["binding_constraint"] = "output_depth"
+                    break
+                output_value += fill[0] * (1 - float(quote["fee"])) * (1 - float(output_discount_rate))
+                output_fills.append(fill[0])
+            else:
+                net = output_value - input_cost
+                if net <= 0:
+                    if ladder:
+                        ladder[-1]["binding_constraint"] = "non_positive_safe_net"
+                    break
+                ladder.append({
+                    "batch_size": batch_size,
+                    "input_cost_chaos": input_cost,
+                    "executable_output_chaos": output_value,
+                    "safe_net_chaos": net,
+                    "roi": net / input_cost if input_cost > 0 else 0.0,
+                    "input_fills_chaos": input_fills,
+                    "output_fills_chaos": output_fills,
+                    "binding_constraint": "record_max_batch",
+                })
+                continue
+        # A failed inner loop must stop the ladder; the prior entry explains why.
+        break
+    return ladder
 class DivinationCardStrategyProvider:
     """Evaluate deterministic/trusted div-card sets using exact market keys and depth."""
 
@@ -1292,7 +1367,7 @@ _DETERMINISTIC_COMPONENT_KEYS = {"item", "item_id", "market_key", "quantity", "c
 _DETERMINISTIC_RECORD_KEYS = {
     "id", "name", "inputs", "outputs", "conversion_costs", "friction_chaos",
     "status", "category", "source", "verified_version", "poe_patch",
-    "strategy_confidence", "max_batch", "expected_execution_time_hours",
+    "strategy_confidence", "max_batch", "expected_execution_time_hours", "active_effort_hours", "lock_time_hours",
     "expected_sale_time_hours", "sale_fee_rate", "output_discount_rate",
     "manual_actions",
 }
@@ -1310,8 +1385,11 @@ def _deterministic_components(value: Any, field_name: str, *, one: bool = False)
         quantity = component.get("quantity")
         if not isinstance(item, str) or not item.strip():
             raise ValueError(f"{field_name} item is required")
-        if not isinstance(market_key, str) or not market_key.strip():
-            raise ValueError(f"{field_name} market_key is required")
+        if not isinstance(market_key, str) or not market_key.strip() or ":" not in market_key:
+            raise ValueError(f"{field_name} market_key must be a canonical category:item key")
+        category, key_item = market_key.split(":", 1)
+        if not category.strip() or not key_item.strip():
+            raise ValueError(f"{field_name} market_key must be a canonical category:item key")
         if not isinstance(quantity, (int, float)) or isinstance(quantity, bool) or not math.isfinite(float(quantity)) or quantity <= 0:
             raise ValueError(f"{field_name} quantity must be positive")
         result.append(dict(component))
@@ -1473,18 +1551,169 @@ class SixLinkRegistry:
 
     def records(self) -> tuple[dict[str, Any], ...]:
         return tuple(dict(record) for record in self._records.values())
+_DETERMINISTIC_ENVELOPE_KEYS = {"version", "source", "poe_patch", "assembly", "vendor", "six_link", "blockers"}
+_DETERMINISTIC_FAMILIES = ("assembly", "vendor", "six_link")
+
+
+def _strict_production_record(record: Mapping[str, Any], *, kind: str, version: str, poe_patch: str) -> dict[str, Any]:
+    required = {"source", "verified_version", "poe_patch", "manual_actions", "max_batch", "conversion_costs"}
+    if kind == "six_link":
+        required.remove("conversion_costs")
+        required.add("linking_costs")
+    if "expected_execution_time_hours" not in record and "active_effort_hours" not in record:
+        required.add("expected_execution_time_hours")
+    if "expected_sale_time_hours" not in record and "lock_time_hours" not in record:
+        required.add("expected_sale_time_hours")
+    missing = required - set(record)
+    if missing:
+        raise ValueError(f"incomplete {kind} record: missing {sorted(missing)}")
+    if record.get("verified_version") != version:
+        raise ValueError(f"stale {kind} record: verified_version {record.get('verified_version')} != envelope version {version}")
+    if record.get("poe_patch") != poe_patch:
+        raise ValueError(f"stale {kind} record: poe_patch {record.get('poe_patch')} != envelope patch {poe_patch}")
+    actions = record.get("manual_actions")
+    if not isinstance(actions, list) or not all(isinstance(item, str) and item.strip() for item in actions):
+        raise ValueError("manual_actions must be a list of non-empty strings")
+    active = record.get("active_effort_hours", record.get("expected_execution_time_hours"))
+    lock = record.get("lock_time_hours")
+    sale = record.get("expected_sale_time_hours", 0)
+    for field, value, minimum in (("active_effort_hours", active, 0), ("expected_sale_time_hours", sale, 0)):
+        if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(float(value)) or value < minimum:
+            raise ValueError(f"{field} must be non-negative")
+    if active <= 0:
+        raise ValueError("active_effort_hours must be positive")
+    if lock is not None and (not isinstance(lock, (int, float)) or isinstance(lock, bool) or not math.isfinite(float(lock)) or lock <= 0):
+        raise ValueError("lock_time_hours must be positive")
+    if lock is not None and lock < active:
+        raise ValueError("lock_time_hours cannot be shorter than active_effort_hours")
+    normalized = dict(record)
+    normalized.setdefault("expected_execution_time_hours", active)
+    normalized.setdefault("expected_sale_time_hours", max(0.0, float(lock) - float(active)) if lock is not None else sale)
+    record = normalized
+    for field in ("inputs", "outputs") if kind != "assembly" and kind != "six_link" else ():
+        _deterministic_components(record[field], field)
+    if kind == "assembly":
+        _deterministic_components(record["parts"], "parts")
+        _deterministic_components(record["whole"], "whole", one=True)
+        costs = record["conversion_costs"]
+        if not isinstance(costs, list):
+            raise ValueError("conversion_costs must be a list")
+        if costs:
+            _deterministic_components(costs, "conversion_costs")
+    elif kind == "six_link":
+        if not isinstance(record["linking_costs"], list):
+            raise ValueError("linking_costs must be a list")
+        if record["linking_costs"]:
+            _deterministic_components(record["linking_costs"], "linking_costs")
+    else:
+        _deterministic_components(record["conversion_costs"], "conversion_costs") if record["conversion_costs"] else None
+    return dict(record)
+
+
+@dataclass
+class DeterministicRegistryEnvelope:
+    version: str
+    source: str
+    poe_patch: str
+    assembly: AssemblyTransformationRegistry
+    vendor: VendorTransformationRegistry
+    six_link: SixLinkRegistry
+    blockers: dict[str, list[str]]
+    rejected: dict[str, tuple[dict[str, Any], ...]]
+
+    @classmethod
+    def from_json(cls, path: str | Path) -> "DeterministicRegistryEnvelope":
+        return load_deterministic_registry_envelope(path)
+    def health_report(self, context: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        context = context or {}
+        price_keys = set(context.get("price_records", {})) | set(context.get("prices", {}))
+        metadata = {"version": self.version, "source": self.source, "poe_patch": self.poe_patch}
+        result: dict[str, Any] = {"registry": metadata, **metadata, "families": {}}
+        for family in _DETERMINISTIC_FAMILIES:
+            registry = getattr(self, family)
+            accepted = list(registry.records())
+            rejected = [dict(item) for item in self.rejected.get(family, ())]
+            reasons = list(self.blockers.get(family, ()))
+            if not accepted:
+                state = "unsupported_empty"
+                if not reasons:
+                    reasons.append(f"no verified {family} production definitions")
+            else:
+                missing = sorted({str(component["market_key"]) for record in accepted for component in (
+                    record.get("inputs", []) + record.get("outputs", []) + record.get("conversion_costs", [])
+                ) if str(component["market_key"]) not in price_keys})
+                if missing:
+                    state = "awaiting_market_data"
+                    reasons.append("missing exact market keys: " + ", ".join(missing))
+                else:
+                    state = "theoretical_only"
+                    reasons.append("verified definitions have reference prices but no validated executable depth")
+            if family == "six_link":
+                reasons.append("exact base/linked identity evidence is unavailable; six-link production remains blocked")
+            result["families"][family] = {
+                "accepted_count": len(accepted), "rejected_count": len(rejected), "rejected": rejected,
+                "state": state, "reasons": reasons,
+            }
+        return result
+
+def load_deterministic_registry_envelope(path: str | Path) -> DeterministicRegistryEnvelope:
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    required = {"version", "source", "poe_patch", "assembly", "vendor", "six_link", "blockers"}
+    if not isinstance(payload, Mapping) or not required <= set(payload) or set(payload) - _DETERMINISTIC_ENVELOPE_KEYS:
+        raise ValueError("deterministic registry envelope must contain version, source, poe_patch, assembly, vendor, and six_link")
+    for field in ("version", "source", "poe_patch"):
+        if not isinstance(payload[field], str) or not payload[field].strip():
+            raise ValueError(f"deterministic envelope {field} is required")
+    if any(not isinstance(payload[field], list) for field in _DETERMINISTIC_FAMILIES):
+        raise ValueError("deterministic envelope family records must be lists")
+    blockers = payload.get("blockers", {})
+    if not isinstance(blockers, Mapping) or set(blockers) - set(_DETERMINISTIC_FAMILIES) or any(
+        not isinstance(value, list) or not all(isinstance(reason, str) and reason.strip() for reason in value)
+        for value in blockers.values()
+    ):
+        raise ValueError("deterministic envelope blockers must be non-empty reason lists")
+    registries = {
+        "assembly": AssemblyTransformationRegistry(),
+        "vendor": VendorTransformationRegistry(),
+        "six_link": SixLinkRegistry(),
+    }
+    rejected: dict[str, list[dict[str, Any]]] = {family: [] for family in _DETERMINISTIC_FAMILIES}
+    seen: set[str] = set()
+    for family in _DETERMINISTIC_FAMILIES:
+        for record in payload[family]:
+            record_id = str(record.get("id", "<unknown>")) if isinstance(record, Mapping) else "<unknown>"
+            try:
+                normalized = _strict_production_record(record, kind=family, version=payload["version"], poe_patch=payload["poe_patch"])
+                if record_id in seen:
+                    raise ValueError(f"duplicate deterministic transformation: {record_id}")
+                registries[family].register(normalized)
+                seen.add(record_id)
+            except (TypeError, ValueError, KeyError) as exc:
+                rejected[family].append({"id": record_id, "reason": str(exc)})
+    envelope = DeterministicRegistryEnvelope(
+        version=payload["version"], source=payload["source"], poe_patch=payload["poe_patch"],
+        assembly=registries["assembly"], vendor=registries["vendor"], six_link=registries["six_link"],
+        blockers={family: [str(reason) for reason in blockers.get(family, [])] for family in _DETERMINISTIC_FAMILIES},
+        rejected={family: tuple(values) for family, values in rejected.items()},
+    )
+    return envelope
+load_deterministic_registries = load_deterministic_registry_envelope
+
+
+def default_deterministic_registry_envelope() -> DeterministicRegistryEnvelope:
+    return load_deterministic_registry_envelope(Path(__file__).with_name("deterministic_transformations.json"))
 
 
 def default_assembly_registry() -> AssemblyTransformationRegistry:
-    return AssemblyTransformationRegistry()
+    return default_deterministic_registry_envelope().assembly
 
 
 def default_vendor_registry() -> VendorTransformationRegistry:
-    return VendorTransformationRegistry()
+    return default_deterministic_registry_envelope().vendor
 
 
 def default_six_link_registry() -> SixLinkRegistry:
-    return SixLinkRegistry()
+    return default_deterministic_registry_envelope().six_link
 
 
 def _verified_component_price(context: Mapping[str, Any], component: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -1527,90 +1756,91 @@ def _deferred_route(
         return None
     cost_info = prices[:len(all_costs)]
     output_info = prices[len(all_costs):]
-    material_cost = sum(float(item["quantity"]) * info["price"] for item, info in zip(all_costs, cost_info, strict=True))
     friction = float(record.get("friction_chaos", 0) if friction_chaos is None else friction_chaos)
-    total_cost = material_cost + friction
     discount = float(record.get("output_discount_rate", 0))
-    output_value = sum(float(item["quantity"]) * info["price"] for item, info in zip(outputs, output_info, strict=True)) * (1 - discount)
     sale_fee = float(record.get("sale_fee_rate", 0))
+    material_cost = sum(float(item["quantity"]) * info["price"] for item, info in zip(all_costs, cost_info, strict=True))
+    total_cost = material_cost + friction
+    output_value = sum(float(item["quantity"]) * info["price"] for item, info in zip(outputs, output_info, strict=True)) * (1 - discount)
     net = output_value * (1 - sale_fee) - total_cost
-    confidence_values = [item["confidence"] for item in prices if item is not None]
-    pricing_confidence = min(confidence_values)
+    pricing_confidence = min(info["confidence"] for info in prices)
     strategy_confidence = float(record.get("strategy_confidence", 1.0))
     confidence = pricing_confidence * strategy_confidence
-    capacities = [info["volume"] / float(component["quantity"]) for component, info in zip(all_costs + outputs, prices, strict=True) if info["volume"]]
-    capacity = min([float(record.get("max_batch", 1)), *capacities]) if capacities else float(record.get("max_batch", 1))
     manual = list(record.get("manual_actions", []))
+    active_time = float(record.get("active_effort_hours", record.get("expected_execution_time_hours", 0.25)))
+    capital_lock_time = float(record.get("lock_time_hours", active_time + float(record.get("expected_sale_time_hours", 0))))
+    capital_lock_time = max(0.25, capital_lock_time)
+    execution_prices = context.get("execution_prices", {})
+    input_quotes = [_quote_info(execution_prices, str(item["market_key"]), side="buy") for item in inputs]
+    cost_quotes = [_quote_info(execution_prices, str(item["market_key"]), side="buy") for item in conversion_costs]
+    output_quotes = [_quote_info(execution_prices, str(item["market_key"]), side="sell") for item in outputs]
+    max_batch = int(record.get("max_batch", 1))
+    market_ladder = evaluate_deterministic_batch_ladder(
+        inputs=inputs, conversion_costs=conversion_costs, outputs=outputs,
+        input_quotes=input_quotes, cost_quotes=cost_quotes, output_quotes=output_quotes,
+        max_batch=max_batch, budget_chaos=0, time_horizon_hours=float("inf"),
+        capital_lock_time=capital_lock_time, sale_fee_rate=sale_fee,
+        output_discount_rate=discount, friction_chaos=friction,
+    )
+    budget = float(context.get("budget_chaos", 0) or 0)
+    horizon = float(context.get("capacity_horizon_hours", 0) or 0)
+    budget_ladder = evaluate_deterministic_batch_ladder(
+        inputs=inputs, conversion_costs=conversion_costs, outputs=outputs,
+        input_quotes=input_quotes, cost_quotes=cost_quotes, output_quotes=output_quotes,
+        max_batch=max_batch, budget_chaos=budget, time_horizon_hours=float("inf"),
+        capital_lock_time=capital_lock_time, sale_fee_rate=sale_fee,
+        output_discount_rate=discount, friction_chaos=friction,
+    ) if budget > 0 else []
+    recommended_ladder = evaluate_deterministic_batch_ladder(
+        inputs=inputs, conversion_costs=conversion_costs, outputs=outputs,
+        input_quotes=input_quotes, cost_quotes=cost_quotes, output_quotes=output_quotes,
+        max_batch=max_batch, budget_chaos=budget, time_horizon_hours=horizon or float("inf"),
+        capital_lock_time=capital_lock_time, sale_fee_rate=sale_fee,
+        output_discount_rate=discount, friction_chaos=friction,
+    ) if budget > 0 or horizon > 0 else market_ladder
+    market_capacity = len(market_ladder)
+    budget_capacity = len(budget_ladder)
+    recommended_capacity = len(recommended_ladder)
+    executable = market_ladder[0] if market_ladder else None
+    route_status = "executable" if executable else "theoretical"
+    reasons = ["verified deterministic transformation", f"definition source: {record['source']} ({record['verified_version']})"]
+    reasons.append("positive expected net profit" if net > 0 else "negative expected net profit")
+    if executable:
+        reasons.append("validated cumulative input, conversion-cost, and output depth")
+    else:
+        reasons.append("exact executable depth unavailable or no positive-safe batch; executable capacity is zero")
+    if manual:
+        route_status = "manual_only" if route_status == "executable" else route_status
+        reasons.append("manual-only execution; automatic allocation is disabled")
     source_values = sorted({str(info["source"]) for info in prices})
     source = source_values[0] if len(source_values) == 1 else "mixed"
-    route_status = "manual_only" if manual else "theoretical"
-    active_time = float(record["expected_execution_time_hours"])
-    capital_lock_time = max(0.25, active_time + float(record.get("expected_sale_time_hours", 0)))
-    # Snapshot volumes are reference liquidity; no exact executable ladder exists here.
-    market_capacity = budget_capacity = recommended_capacity = 0
-
-    reasons = [
-        "verified deterministic transformation",
-        f"definition source: {record['source']} ({record['verified_version']})",
-        "positive expected net profit" if net > 0 else "negative expected net profit",
-    ]
-    if manual:
-        reasons.append("manual-only execution; automatic allocation is disabled")
-    reasons.append("exact executable depth unavailable; executable capacity is zero")
+    route_cost = float(executable["input_cost_chaos"]) if executable else total_cost
+    route_output = float(executable["executable_output_chaos"]) if executable else output_value * (1 - sale_fee)
+    route_net = float(executable["safe_net_chaos"]) if executable else net
+    route_roi = route_net / route_cost if route_cost > 0 else 0.0
     return ProfitRoute(
-        transformation_id=str(route_id or record["id"]),
-        name=str(name or record["name"]),
-        strategy_family=str(record.get("strategy_family", "deterministic")),
-        status=route_status,
-        league=context.get("league"),
-        category=str(record.get("category", "Transformation")),
-        total_input_cost=total_cost,
-        realistic_output_value=output_value,
-        gross_profit=output_value - total_cost,
-        expected_net_profit=net,
-        theoretical_net_profit=net,
-        executable_net_profit=None,
-        roi=net / total_cost if total_cost > 0 else 0.0,
-        theoretical_roi=net / total_cost if total_cost > 0 else None,
-        executable_roi=None,
-        capital_required=total_cost,
-        capacity=float(recommended_capacity),
-        capacity_units="items",
-        active_execution_time=active_time,
-        capital_lock_time=capital_lock_time,
-        elapsed_cycle_time=capital_lock_time,
-        profit_per_active_hour=net / max(0.25, active_time),
-        roi_per_lock_hour=(net / total_cost if total_cost > 0 else 0.0) / capital_lock_time,
-        budget_capacity=budget_capacity,
-        recommended_capacity=recommended_capacity,
-        estimated_sets_per_lock_hour=0.0,
-        market_capacity=market_capacity,
-        time_horizon_hours=float(context.get("capacity_horizon_hours", 0) or 0),
-        capacity_assumptions=["aggregate reference volume is not exact executable depth"],
-        reasons=reasons,
-        confidence=confidence,
-        pricing_confidence=pricing_confidence,
-        strategy_confidence=strategy_confidence,
-        execution_risk=1.0 if manual else 0.0,
-        liquidity={"tier": validation.liquidity_tier(capacity), "volume": capacity, "components": {
-            str(component["market_key"]): info["volume"] for component, info in zip(all_costs + outputs, prices, strict=True)
-            if info["volume"] is not None
-        }},
-        source=source,
-        verified_version=str(record["verified_version"]),
-        poe_patch=record.get("poe_patch"),
-        verification_metadata={
-            "definition_source": record["source"],
-            "verified_version": record["verified_version"],
-            "poe_patch": record.get("poe_patch"),
-            "price_sources": source_values,
-            "market_keys": [str(item["market_key"]) for item in all_costs + outputs],
-            "linking_method": record.get("linking_method"),
-        },
-        inputs=[dict(item) for item in inputs],
-        costs=[dict(item) for item in conversion_costs] + ([{"item": "execution friction", "quantity": 1, "chaos": friction}] if friction else []),
-        outputs=[dict(item) for item in outputs],
-        execution_steps=manual,
+        transformation_id=str(route_id or record["id"]), name=str(name or record["name"]),
+        strategy_family=str(record.get("strategy_family", "deterministic")), status=route_status,
+        league=context.get("league"), category=str(record.get("category", "Transformation")),
+        total_input_cost=route_cost, realistic_output_value=route_output,
+        gross_profit=route_output - route_cost, expected_net_profit=route_net,
+        theoretical_net_profit=net, executable_net_profit=float(executable["safe_net_chaos"]) if executable else None,
+        roi=route_roi, theoretical_roi=net / total_cost if total_cost > 0 else None,
+        executable_roi=route_roi if executable else None, capital_required=route_cost,
+        capacity=float(recommended_capacity), capacity_units="batches", active_execution_time=active_time,
+        capital_lock_time=capital_lock_time, elapsed_cycle_time=capital_lock_time,
+        profit_per_active_hour=route_net / max(0.25, active_time), roi_per_lock_hour=route_roi / capital_lock_time,
+        budget_capacity=budget_capacity, recommended_capacity=recommended_capacity,
+        estimated_sets_per_lock_hour=float(1 / capital_lock_time) if market_capacity else 0.0,
+        market_capacity=market_capacity, time_horizon_hours=horizon,
+        capacity_assumptions=["all input, conversion-cost, and output quotes are consumed cumulatively", "missing or stale depth yields zero executable capacity"],
+        reasons=reasons, confidence=confidence, pricing_confidence=pricing_confidence,
+        strategy_confidence=strategy_confidence, execution_risk=1.0 if manual else 0.0,
+        liquidity={"tier": validation.liquidity_tier(min((info["volume"] or 0) for info in prices)), "volume": min((info["volume"] or 0) for info in prices), "components": {
+            str(component["market_key"]): info["volume"] for component, info in zip(all_costs + outputs, prices, strict=True) if info["volume"] is not None
+        }}, source=source, verified_version=str(record["verified_version"]), poe_patch=record.get("poe_patch"),
+        verification_metadata={"definition_source": record["source"], "verified_version": record["verified_version"], "poe_patch": record.get("poe_patch"), "price_sources": source_values, "market_keys": [str(item["market_key"]) for item in all_costs + outputs], "linking_method": record.get("linking_method"), "batch_ladder": recommended_ladder},
+        inputs=[dict(item) for item in inputs], costs=[dict(item) for item in conversion_costs], outputs=[dict(item) for item in outputs], execution_steps=manual,
     )
 
 
@@ -1712,70 +1942,59 @@ class ArbitrageGraphStrategyProvider:
                  and (not requested or requested in {"Transformation", "ArbitrageGraph", record.get("category", "Transformation")})]
         routes: list[ProfitRoute] = []
 
+        def identity(component: Mapping[str, Any]) -> str:
+            return str(component.get("market_key", component["item"]))
+
         def walk(path: list[dict[str, Any]], visited: set[str]) -> None:
             if len(path) >= self.min_edges:
-                metadata = {
-                    (edge["source"], edge["verified_version"], edge.get("poe_patch"))
-                    for edge in path
-                }
+                metadata = {(edge["source"], edge["verified_version"], edge.get("poe_patch")) for edge in path}
                 if len(metadata) != 1:
                     return
                 first, last = path[0], path[-1]
-                scales = [1.0] * len(path)
+                scales = [Fraction(1)] * len(path)
                 for index in range(len(path) - 1, 0, -1):
-                    required = float(path[index]["inputs"][0]["quantity"]) * scales[index]
-                    produced = float(path[index - 1]["outputs"][0]["quantity"])
-                    ratio = required / produced
-                    if ratio <= 0 or abs(ratio - round(ratio)) > 1e-9:
+                    required = Fraction(str(path[index]["inputs"][0]["quantity"])) * scales[index]
+                    produced = Fraction(str(path[index - 1]["outputs"][0]["quantity"]))
+                    if required <= 0 or produced <= 0:
                         return
-                    scales[index - 1] = ratio
+                    scales[index - 1] = required / produced
+                denominator = math.lcm(*(value.denominator for value in scales))
+                integer_scales = [int(value * denominator) for value in scales]
+                divisor = math.gcd(*integer_scales)
+                scales = [value // divisor for value in integer_scales]
+                route_max_batch = min(int(edge.get("max_batch", 1)) // scale for edge, scale in zip(path, scales, strict=True))
+                if route_max_batch < 1:
+                    return
+                scale_values = [float(scale) for scale in scales]
                 scaled_inputs = [{**first["inputs"][0], "quantity": first["inputs"][0]["quantity"] * scales[0]}]
                 scaled_outputs = [{**last["outputs"][0], "quantity": last["outputs"][0]["quantity"] * scales[-1]}]
                 conversion_costs: list[dict[str, Any]] = []
                 friction = 0.0
-                for edge, scale in zip(path, scales, strict=True):
-                    conversion_costs.extend(
-                        [{**cost, "quantity": cost["quantity"] * scale} for cost in edge.get("conversion_costs", [])]
-                    )
+                for edge, scale in zip(path, scale_values, strict=True):
+                    conversion_costs.extend([{**cost, "quantity": cost["quantity"] * scale} for cost in edge.get("conversion_costs", [])])
                     friction += float(edge.get("friction_chaos", 0)) * scale
                 synthetic = {
-                    **first,
-                    "id": "graph:" + ":".join(edge["id"] for edge in path),
-                    "name": " → ".join(edge["name"] for edge in path),
-                    "strategy_family": "bounded_arbitrage_graph",
-                    "conversion_costs": conversion_costs,
-                    "friction_chaos": friction,
-                    "expected_execution_time_hours": sum(float(edge["expected_execution_time_hours"]) * scale for edge, scale in zip(path, scales, strict=True)),
-                    "expected_sale_time_hours": sum(float(edge.get("expected_sale_time_hours", 0)) for edge in path),
-                    "max_batch": min(int(edge.get("max_batch", 1)) for edge in path),
+                    **first, "id": "graph:" + ":".join(edge["id"] for edge in path), "name": " → ".join(edge["name"] for edge in path),
+                    "strategy_family": "bounded_arbitrage_graph", "conversion_costs": conversion_costs, "friction_chaos": friction,
+                    "expected_execution_time_hours": sum(float(edge.get("active_effort_hours", edge["expected_execution_time_hours"])) * scale for edge, scale in zip(path, scale_values, strict=True)),
+                    "expected_sale_time_hours": sum(float(edge.get("expected_sale_time_hours", 0)) for edge in path), "max_batch": route_max_batch,
                     "manual_actions": [action for edge in path for action in edge.get("manual_actions", [])],
                 }
-                route = _deferred_route(
-                    synthetic,
-                    context,
-                    route_id=synthetic["id"],
-                    name=synthetic["name"],
-                    inputs=scaled_inputs,
-                    outputs=scaled_outputs,
-                    conversion_costs=conversion_costs,
-                    friction_chaos=friction,
-                )
+                route = _deferred_route(synthetic, context, route_id=synthetic["id"], name=synthetic["name"], inputs=scaled_inputs, outputs=scaled_outputs, conversion_costs=conversion_costs, friction_chaos=friction)
                 if route:
                     route.strategy_family = "bounded_arbitrage_graph"
                     route.verification_metadata["graph_edges"] = [edge["id"] for edge in path]
+                    route.verification_metadata["graph_scales"] = scale_values
                     route.reasons.append(f"bounded graph route ({len(path)} transformation edge(s), maximum {self.max_edges})")
                     routes.append(route)
             if len(path) == self.max_edges:
                 return
-            current = path[-1]["outputs"][0]["item"] if path else None
+            current = identity(path[-1]["outputs"][0]) if path else None
             for edge in edges:
-                if edge["id"] in visited:
+                if edge["id"] in visited or (current is not None and identity(edge["inputs"][0]) != current):
                     continue
-                if current is not None and edge["inputs"][0]["item"] != current:
-                    continue
-                # A node may not be revisited; this prevents currency cycles.
-                next_node = edge["outputs"][0]["item"]
-                if next_node in {item["inputs"][0]["item"] for item in path}:
+                next_node = identity(edge["outputs"][0])
+                if next_node in {identity(item["inputs"][0]) for item in path}:
                     continue
                 walk(path + [edge], visited | {edge["id"]})
 
@@ -1819,14 +2038,20 @@ class DeterministicSixLinkStrategyProvider:
 
 
 class DeferredDeterministicStrategyProvider:
-    """Single integration point for §16–19; empty defaults keep unknown recipes closed."""
+    """Single integration point for the verified production registries."""
 
     def __init__(
         self,
         assembly: AssemblyTransformationRegistry | None = None,
         vendor: VendorTransformationRegistry | None = None,
         six_link: SixLinkRegistry | None = None,
+        envelope: DeterministicRegistryEnvelope | None = None,
     ) -> None:
+        self.envelope = envelope
+        if envelope is not None:
+            assembly = assembly or envelope.assembly
+            vendor = vendor or envelope.vendor
+            six_link = six_link or envelope.six_link
         self.assembly = assembly if assembly is not None else default_assembly_registry()
         self.vendor = vendor if vendor is not None else default_vendor_registry()
         self.six_link = six_link if six_link is not None else default_six_link_registry()
@@ -1847,9 +2072,37 @@ class DeferredDeterministicStrategyProvider:
             opportunities.extend(provider.discover(context))
         return opportunities
 
+    def readiness(self, context: Mapping[str, Any]) -> dict[str, Any]:
+        if self.envelope is not None:
+            report = self.envelope.health_report(context)
+        else:
+            report = {"registry": {"version": "custom", "source": "runtime", "poe_patch": None}, "version": "custom", "source": "runtime", "poe_patch": None, "families": {}}
+            for family, registry in (("assembly", self.assembly), ("vendor", self.vendor), ("six_link", self.six_link)):
+                accepted = list(registry.records())
+                missing = sorted({str(component["market_key"]) for record in accepted for component in (
+                    record.get("inputs", []) + record.get("outputs", []) + record.get("conversion_costs", [])
+                ) if str(component["market_key"]) not in (set(context.get("prices", {})) | set(context.get("price_records", {})))})
+                report["families"][family] = {"accepted_count": len(accepted), "rejected_count": 0, "rejected": [],
+                                               "state": "awaiting_market_data" if accepted and missing else "theoretical_only" if accepted else "unsupported_empty",
+                                               "reasons": ["missing exact market keys: " + ", ".join(missing)] if missing else [] if accepted else [f"no verified {family} production definitions"]}
+        family_routes = {
+            "assembly": AssemblyStrategyProvider(self.assembly).evaluate(context),
+            "vendor": VendorTransformationStrategyProvider(self.vendor).evaluate(context),
+            "six_link": DeterministicSixLinkStrategyProvider(self.six_link).evaluate(context),
+        }
+        for family, routes in family_routes.items():
+            item = report["families"][family]
+            if routes and any(route.market_capacity > 0 for route in routes):
+                item["state"] = "ready"
+            elif routes and item["state"] != "awaiting_market_data":
+                item["state"] = "theoretical_only"
+        if "exact base/linked identity evidence" not in " ".join(report["families"]["six_link"]["reasons"]):
+            report["families"]["six_link"]["reasons"].append("exact base/linked identity evidence is unavailable; six-link production remains blocked")
+        return report
+
 
 def default_deferred_strategy_provider() -> DeferredDeterministicStrategyProvider:
-    return DeferredDeterministicStrategyProvider()
+    return DeferredDeterministicStrategyProvider(envelope=default_deterministic_registry_envelope())
 
 
 DeterministicAssemblyRegistry = AssemblyTransformationRegistry
