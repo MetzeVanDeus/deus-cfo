@@ -1042,8 +1042,9 @@ async def get_profit_routes(
         strategies.default_transformation_registry()
     ).evaluate(context))
     deferred_provider = strategies.default_deferred_strategy_provider()
-    routes.extend(deferred_provider.evaluate(context))
-    deterministic_readiness = deferred_provider.readiness(context)
+    deferred_routes = list(deferred_provider.evaluate(context))
+    routes.extend(deferred_routes)
+    deterministic_readiness = deferred_provider.readiness(context, routes=deferred_routes)
     div_registry = strategies.default_div_card_registry() if category in (None, "DivinationCard") else None
     registry_health = (
         div_registry.health_report(

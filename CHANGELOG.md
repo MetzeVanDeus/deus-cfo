@@ -1,5 +1,16 @@
 # Changelog
 ## Unreleased
+## 0.6.1 — 2026-08-31
+
+### Fixed
+
+- Applied deterministic sale fees to executable output, safe net, ROI, capacity, and positive-net gating.
+- Made bounded graph routes use terminal-edge liquidation rates and the weakest strategy confidence across each path.
+- Reused already-evaluated deferred routes when building deterministic readiness reports.
+
+### Release
+
+- Released corrective hotfix `0.6.1` for Phase 2 deterministic-route economics and evaluation efficiency.
 ## 0.6.0 — 2026-08-31
 
 ### Added
