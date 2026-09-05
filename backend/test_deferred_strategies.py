@@ -1,5 +1,6 @@
 import asyncio
 import json
+from datetime import datetime, timezone
 from strategies import evaluate_deterministic_batch_ladder, load_deterministic_registry_envelope
 
 import pytest
@@ -9,6 +10,7 @@ from strategies import (
     ArbitrageGraphStrategyProvider,
     AssemblyStrategyProvider,
     AssemblyTransformationRegistry,
+    DeferredDeterministicStrategyProvider,
     DeterministicSixLinkStrategyProvider,
     SixLinkRegistry,
     VendorTransformationRegistry,
@@ -192,6 +194,39 @@ def test_six_link_is_manual_only_even_without_declared_manual_actions():
     assert provider.discover({**context(
         ("UniqueArmour:base", 10, "A"), ("UniqueArmour:linked", 30, "A"), ("Currency:Orb", 3, "A"),
     ), "bankroll": 100}) == []
+
+
+def test_readiness_reuses_routes_with_provider_family_names():
+    provider = DeferredDeterministicStrategyProvider(
+        assembly=AssemblyTransformationRegistry([assembly_record(direction="assemble")]),
+        vendor=VendorTransformationRegistry(),
+        six_link=SixLinkRegistry(),
+    )
+    prices = context(("Fragment:Part", 2, "A"), ("Fragment:Whole", 20, "A"))
+    observed_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    prices["execution_prices"] = {
+        "Fragment:Part": {
+            "buy_levels": [{"price": 2, "quantity": 12}],
+            "sell_levels": [{"price": 2, "quantity": 12}],
+            "fee_rate": 0,
+            "observed_at": observed_at,
+            "confidence": 1,
+            "source": "test-depth",
+        },
+        "Fragment:Whole": {
+            "buy_levels": [{"price": 20, "quantity": 4}],
+            "sell_levels": [{"price": 20, "quantity": 4}],
+            "fee_rate": 0,
+            "observed_at": observed_at,
+            "confidence": 1,
+            "source": "test-depth",
+        },
+    }
+    routes = provider.evaluate(prices)
+
+    assert routes[0].strategy_family == "deterministic_assembly"
+    assert routes[0].market_capacity > 0
+    assert provider.readiness(prices, routes=routes)["families"]["assembly"]["state"] == "ready"
 
 
 @pytest.mark.parametrize(("field", "first_value", "second_value"), [

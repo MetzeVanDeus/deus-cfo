@@ -1,5 +1,15 @@
 # Changelog
 ## Unreleased
+## 0.6.2 — 2026-09-05
+
+### Fixed
+
+- Preserved deterministic provider family identities when reusing evaluated routes for readiness, so executable assembly, vendor, and six-link evidence can promote the correct family to ready.
+
+### Release
+
+- Released corrective hotfix `0.6.2` for deterministic readiness reporting.
+
 ## 0.6.1 — 2026-08-31
 
 ### Fixed
