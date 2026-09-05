@@ -2089,7 +2089,14 @@ class DeferredDeterministicStrategyProvider:
                                                "state": "awaiting_market_data" if accepted and missing else "theoretical_only" if accepted else "unsupported_empty",
                                                "reasons": ["missing exact market keys: " + ", ".join(missing)] if missing else [] if accepted else [f"no verified {family} production definitions"]}
         family_routes = (
-            {family: [route for route in routes if route.strategy_family == family] for family in ("assembly", "vendor", "six_link")}
+            {
+                family: [route for route in routes if route.strategy_family == strategy_family]
+                for family, strategy_family in (
+                    ("assembly", "deterministic_assembly"),
+                    ("vendor", "vendor_transformation"),
+                    ("six_link", "deterministic_six_link"),
+                )
+            }
             if routes is not None else {
                 "assembly": AssemblyStrategyProvider(self.assembly).evaluate(context),
                 "vendor": VendorTransformationStrategyProvider(self.vendor).evaluate(context),
