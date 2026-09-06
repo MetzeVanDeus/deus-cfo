@@ -967,6 +967,9 @@ def _latest_market_context(latest: dict) -> dict:
                     "confidence": row.get("confidence"),
                     "source": row.get("source"),
                     "trade_url": row.get("trade_url"),
+                    "observation_type": row.get("observation_type"),
+                    "market_timestamp": row.get("market_timestamp"),
+                    "confidence_grade": row.get("confidence_grade"),
                 }
             if isinstance(quote, dict):
                 for item in {item_id, item_name} - {""}:
@@ -1013,13 +1016,18 @@ async def get_profit_routes(
     poe_patch: str | None = None,
     budget_chaos: float | None = None,
     horizon_hours: float | None = None,
+    minimum_safe_profit_chaos: float | None = None,
+    execution_bias_percent: float | None = None,
 ):
     """Evaluate read-only routes and optional budget-bounded manual batch plans.
 
     ``poe_patch`` is retained only for response compatibility; callers cannot
     override the active metadata used for verification.
     """
-    for name, amount in (("budget_chaos", budget_chaos), ("horizon_hours", horizon_hours)):
+    for name, amount in (
+        ("budget_chaos", budget_chaos),
+        ("horizon_hours", horizon_hours),
+    ):
         if amount is not None and (
             isinstance(amount, bool)
             or not isinstance(amount, (int, float))
@@ -1027,6 +1035,26 @@ async def get_profit_routes(
             or amount <= 0
         ):
             raise HTTPException(status_code=400, detail=f"{name} must be a finite positive number")
+    if minimum_safe_profit_chaos is not None and (
+        isinstance(minimum_safe_profit_chaos, bool)
+        or not isinstance(minimum_safe_profit_chaos, (int, float))
+        or not math.isfinite(float(minimum_safe_profit_chaos))
+        or minimum_safe_profit_chaos < 0
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="minimum_safe_profit_chaos must be finite and non-negative",
+        )
+    if execution_bias_percent is not None and (
+        isinstance(execution_bias_percent, bool)
+        or not isinstance(execution_bias_percent, (int, float))
+        or not math.isfinite(float(execution_bias_percent))
+        or not 0 <= execution_bias_percent < 100
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="execution_bias_percent must be finite, non-negative, and below 100",
+        )
     if category and category not in ALL_CATEGORIES and category not in {
         "Transformation", "Assembly", "VendorTransformation", "ArbitrageGraph", "SixLink",
     }:
@@ -1038,6 +1066,10 @@ async def get_profit_routes(
         context["budget_chaos"] = float(budget_chaos)
     if horizon_hours is not None:
         context["capacity_horizon_hours"] = float(horizon_hours)
+    if minimum_safe_profit_chaos is not None:
+        context["minimum_safe_profit_chaos"] = float(minimum_safe_profit_chaos)
+    if execution_bias_percent is not None:
+        context["execution_bias_rate"] = float(execution_bias_percent) / 100
     routes = list(strategies.TransformationStrategyProvider(
         strategies.default_transformation_registry()
     ).evaluate(context))

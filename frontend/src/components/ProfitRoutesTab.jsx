@@ -19,8 +19,8 @@ export function ProfitRoutesTab({ categories = [], selectedLeague }) {
   const [routes, setRoutes] = useState([])
   const [readiness, setReadiness] = useState(null)
   const [category, setCategory] = useState('')
-  const [planner, setPlanner] = useState({ budget: '', horizon: '24' })
-  const [requestPlan, setRequestPlan] = useState({ budget: '', horizon: '24' })
+  const [planner, setPlanner] = useState({ budget: '', horizon: '24', minimumSafeProfit: '', executionBias: '' })
+  const [requestPlan, setRequestPlan] = useState({ budget: '', horizon: '24', minimumSafeProfit: '', executionBias: '' })
   const [patch, setPatch] = useState({ status: '', reasons: [] })
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -39,6 +39,8 @@ export function ProfitRoutesTab({ categories = [], selectedLeague }) {
     if (category) params.category = category
     if (requestPlan.budget) params.budget_chaos = Number(requestPlan.budget)
     if (requestPlan.horizon) params.horizon_hours = Number(requestPlan.horizon)
+    if (requestPlan.minimumSafeProfit) params.minimum_safe_profit_chaos = Number(requestPlan.minimumSafeProfit)
+    if (requestPlan.executionBias) params.execution_bias_percent = Number(requestPlan.executionBias)
     api.get('/profit-routes', { params })
       .then(({ data }) => {
         if (cancelled) return
@@ -56,7 +58,7 @@ export function ProfitRoutesTab({ categories = [], selectedLeague }) {
 
   return <div className="terminal-page">
     <div className="page-head"><div><div className="eyebrow">RESEARCH / ROUTES</div><h1>Profit Routes</h1><p className="muted">Routes are shown only when their definitions and market evidence meet the backend’s verification rules. Theoretical routes remain visible when executable liquidity or positive net profit is not verified.</p></div></div>
-    <form className="terminal-panel strategy-form" onSubmit={(event) => { event.preventDefault(); setRequestPlan({ ...planner }) }}><div className="form-row form-row-main"><label className="field"><span>Category</span><select className="input" value={category} onChange={(event) => setCategory(event.target.value)}><option value="">All registered families</option>{categories.filter((item) => item.id === 'DivinationCard').map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label className="field"><span>Budget (Chaos)</span><input className="input numeric" type="number" min="0.000001" step="any" value={planner.budget} onChange={(event) => setPlanner((current) => ({ ...current, budget: event.target.value }))} placeholder="Optional" /></label><label className="field"><span>Horizon (hours)</span><input required className="input numeric" type="number" min="0.000001" step="any" value={planner.horizon} onChange={(event) => setPlanner((current) => ({ ...current, horizon: event.target.value }))} /></label><button className="btn-primary" disabled={loading || !selectedLeague}>PLAN MANUAL BATCH</button></div><p className="muted small">Provider coverage and evidence status are shown below from the backend registry.</p></form>
+    <form className="terminal-panel strategy-form" onSubmit={(event) => { event.preventDefault(); setRequestPlan({ ...planner }) }}><div className="form-row form-row-main"><label className="field"><span>Category</span><select className="input" value={category} onChange={(event) => setCategory(event.target.value)}><option value="">All registered families</option>{categories.filter((item) => item.id === 'DivinationCard').map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label className="field"><span>Budget (Chaos)</span><input className="input numeric" type="number" min="0.000001" step="any" value={planner.budget} onChange={(event) => setPlanner((current) => ({ ...current, budget: event.target.value }))} placeholder="Optional" /></label><label className="field"><span>Horizon (hours)</span><input className="input numeric" type="number" min="0.000001" step="any" value={planner.horizon} onChange={(event) => setPlanner((current) => ({ ...current, horizon: event.target.value }))} /></label><label className="field"><span>Minimum safe profit (Chaos / batch)</span><input className="input numeric" type="number" min="0" step="any" value={planner.minimumSafeProfit} onChange={(event) => setPlanner((current) => ({ ...current, minimumSafeProfit: event.target.value }))} placeholder="Optional" /></label><label className="field"><span>Execution bias (%)</span><input className="input numeric" type="number" min="0" max="99.999999" step="any" value={planner.executionBias} onChange={(event) => setPlanner((current) => ({ ...current, executionBias: event.target.value }))} placeholder="Optional" /></label><button className="btn-primary" type="submit">PLAN ROUTES</button></div><p className="muted small">Provider coverage and evidence status are shown below from the backend registry.</p></form>
     {!selectedLeague && <div className="terminal-panel"><LeagueEmpty /></div>}
     {selectedLeague && loading && <div className="terminal-panel"><LoadingState text="Loading profit routes…" /></div>}
     {selectedLeague && !loading && error && <div className="terminal-panel"><ErrorState message={error} onRetry={() => setRequestPlan({ ...requestPlan })} /></div>}
@@ -76,6 +78,17 @@ function RouteCard({ route }) {
   const units = route.capacity_units || 'capital'
   return <article className="terminal-panel profit-route">
     <div className="panel-title"><div><div className="eyebrow">{route.transformation_id || 'TRANSFORMATION'}</div><h2>{route.name || 'Unnamed route'}</h2></div><span>{route.status ? `STATUS · ${route.status.replaceAll('_', ' ').toUpperCase()}` : (route.source ? `SOURCE · ${route.source}` : 'BACKEND EVALUATION')}</span></div>
+    <div className="metric-group">
+      <h3>Confidence and safe edge</h3>
+      <div className="metric-grid">
+        <Metric label="Certainty" value={route.certainty || '—'} />
+        <Metric label="Liquidity confidence" value={confidenceValue(route.liquidity_confidence)} />
+        <Metric label="Historical confidence" value={confidenceValue(route.historical_confidence)} />
+        <Metric label="Safe edge (Chaos)" value={value(route.safe_edge_chaos)} tone={tone(route.safe_edge_chaos)} />
+        <Metric label="Safe edge (ratio)" value={ratioPercent(route.safe_edge_ratio)} tone={tone(route.safe_edge_ratio)} />
+      </div>
+      <p className="small">Adjustments: {value(route.safe_edge_adjustments)}</p>
+    </div>
     <div className="metric-group">
       <h3>Economics</h3>
       <div className="metric-grid">
@@ -112,6 +125,7 @@ function RouteCard({ route }) {
       <section><h3>Economics</h3><div className="raw-grid route-raw"><Raw label="Theoretical input cost (Chaos)" item={route.total_input_cost} /><Raw label="Theoretical output value (Chaos)" item={route.realistic_output_value} /><Raw label="Actual net (Chaos)" item={route.actual_net_profit} /></div></section>
       <section><h3>Confidence / risk</h3><div className="raw-grid route-raw"><Raw label="Overall confidence (0–1)" item={route.confidence} /><Raw label="Pricing confidence (0–1)" item={route.pricing_confidence} /><Raw label="Strategy confidence (0–1)" item={route.strategy_confidence} /><Raw label="Execution risk (0–1)" item={route.execution_risk} /></div></section>
     </div>
+    <EvidenceLegs legs={route.evidence_legs} />
     <div className="route-bottom">
       <section><h3>Reasons</h3>{list(route.reasons).length ? <ul className="dense-list">{list(route.reasons).map((reason, i) => <li key={i}><span className="signal-mark" />{value(reason)}</li>)}</ul> : <p className="muted small">No reasons supplied.</p>}</section>
       <section><h3>Execution</h3>{route.execution_steps && <p className="small">{value(route.execution_steps)}</p>}<p className="muted small">Recommended capacity: <strong>{value(route.recommended_capacity ?? route.capacity)}</strong> {route.capacity_units ? `(${route.capacity_units})` : ''} · Active execution: <strong>{value(route.active_execution_time)}h</strong> · Capital lock / elapsed cycle: <strong>{value(route.capital_lock_time)}h</strong></p>{route.time_horizon_hours > 0 && <p className="muted small">Time horizon: <strong>{value(route.time_horizon_hours)}h</strong> · Assumptions: {value(route.capacity_assumptions)}</p>}</section>
@@ -123,3 +137,8 @@ function BatchPlan({ plan }) { return <section className="route-bottom"><div><h3
 function Metric({ label, value: item, tone }) { return <div className="metric"><span>{label}</span><strong className={tone || ''}>{item}</strong></div> }
 function Raw({ label, item }) { return <div className="raw-row"><span>{label}</span><strong>{value(item)}</strong></div> }
 function RouteSection({ title, items }) { return <section><h3>{title}</h3>{list(items).length ? <ul className="dense-list">{list(items).map((item, i) => <li key={i}>{value(item)}</li>)}</ul> : <p className="muted small">—</p>}</section> }
+function EvidenceLegs({ legs }) {
+  const items = list(legs)
+  return <section className="route-bottom"><h3>Evidence legs</h3>{items.length ? <div className="table-wrap"><table className="dense-table"><thead><tr><th>Market key</th><th>Role</th><th>Quote</th><th>Source / observation</th><th>Quote details</th><th>Freshness policy</th><th>Confidence</th><th>Blocker</th></tr></thead><tbody>{items.map((leg, index) => <tr key={`${leg.market_key || 'leg'}-${index}`}><td>{value(leg.market_key)}</td><td>{value(leg.role)}</td><td>{value(leg.quote_side)}</td><td>{value(leg.source)} / {value(leg.observation_type)}</td><td>Kind: {value(leg.quote_kind)} · Grade: {value(leg.confidence_grade)}<br />Observed: {value(leg.observed_at)}<br />Market: {value(leg.market_timestamp)}</td><td>{value(leg.freshness_state)}{leg.max_age_hours != null ? ` · max age policy ${value(leg.max_age_hours)}h` : ''}</td><td>{confidenceValue(leg.confidence)}</td><td>{value(leg.blocker)}</td></tr>)}</tbody></table></div> : <p className="muted small">No evidence legs supplied.</p>}</section>
+}
+function confidenceValue(item) { return item == null ? '—' : ratioPercent(item) }

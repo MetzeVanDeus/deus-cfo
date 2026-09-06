@@ -101,6 +101,8 @@ Production transformation coverage includes the verified **The Doctor → Headhu
 
 A route can remain theoretical or be absent when exact prices, buy-side depth, historical evidence, patch metadata, or liquidation evidence are missing. Headhunter sell depth is never inferred from seller asks. The application never executes trades.
 
+Profit Routes preserves evidence for each input, cost, and output leg, including exact market key, quote side, source, timestamps, confidence, freshness policy, and any blocker. The optional minimum safe profit is measured in total Chaos per evaluated batch. The optional execution-bias percentage conservatively raises input fills and lowers output liquidation before budget, capacity, and batch-plan calculations. Known fees, output discounts, conversion friction, cumulative depth, and listing haircuts are reported separately and are not applied twice. Stale quotes hard-block executable capacity instead of receiving an invented numeric penalty; absent route history remains unavailable rather than becoming zero confidence.
+
 ## Data trust and supported upstreams
 
 - `web.poecdn.com/api/currency-exchange` is the documented Currency Exchange CDN API used for hourly historical exchange data.
