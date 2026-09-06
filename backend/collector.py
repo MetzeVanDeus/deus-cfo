@@ -824,7 +824,7 @@ async def run_collector(league: str | None = None, interval: int = 1800, once: b
             await asyncio.sleep(min(interval, 5))
             continue
         results = await collect_all_categories(selected_league)
-        cx_stored = await cx_collector.poll_latest_cx()
+        cx_stored = await cx_collector.poll_latest_cx() if database.collection_allowed() else 0
         log.info("collection cycle complete for %s: %s; cx=%d", selected_league, results, cx_stored)
         if once:
             return

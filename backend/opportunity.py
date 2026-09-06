@@ -480,6 +480,7 @@ def filter_opportunities(opportunities: list[Opportunity],
 
 async def _attach_historical_outcomes(
     opportunities: list[Opportunity],
+    latest: dict[tuple[str, str], dict],
     *,
     include_feedback: bool = True,
 ) -> None:
@@ -492,19 +493,22 @@ async def _attach_historical_outcomes(
     horizon = str(HISTORICAL_OUTCOME_HOURS)
     outcomes = {}
     for group in result["groups"]:
-        key = (group["category"], group["source"], group["signal_type"])
-        outcome = group["horizons"].get(horizon, {})
-        # Backtests also partition by liquidity tier. Do not let an empty
-        # later tier overwrite a populated historical cohort.
-        if int(outcome.get("sample_size") or 0) <= 0:
-            continue
-        previous = outcomes.get(key)
-        if previous is None or int(outcome["sample_size"]) > int(previous.get("sample_size") or 0):
-            outcomes[key] = outcome
+        key = (
+            group["category"],
+            group["source"],
+            group["signal_type"],
+            group["liquidity_tier"],
+            group["opportunity_type"],
+        )
+        outcomes[key] = group["horizons"].get(horizon, {})
     from portfolio import calibrate_opportunity
 
     for opp in opportunities:
-        outcome = outcomes.get((opp.category, opp.type, opp.detector_id), {})
+        row = latest.get((opp.category, opp.item_id), {})
+        tier = validation.liquidity_tier(float(row.get("volume", 0) or 0))
+        outcome = outcomes.get(
+            (opp.category, opp.type, opp.detector_id, tier, opp.type), {}
+        )
         if outcome.get("sample_size"):
             evidence_sources = dict(outcome.get("evidence_sources") or {})
             reconstructed_size = int(outcome.get("reconstructed_sample_size") or 0)
@@ -567,12 +571,14 @@ async def get_all_opportunities(
         for anom in await anomaly_mod.detect_anomalies(league, category, hours):
             opportunities.append(await anomaly_to_opportunity(anom, league, hours))
 
-    await _attach_historical_outcomes(opportunities, include_feedback=include_feedback)
     latest = {
         (row["category"], row["item_id"]): row
         for rows in grouped.values()
         for row in rows
     }
+    await _attach_historical_outcomes(
+        opportunities, latest, include_feedback=include_feedback
+    )
     _attach_execution_fields(opportunities, latest)
     opportunities.sort(key=lambda o: o.confidence, reverse=True)
     return opportunities
