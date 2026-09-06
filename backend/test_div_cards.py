@@ -414,6 +414,19 @@ def test_budgeted_route_returns_reconciled_manual_batch_plan(monkeypatch):
         "url": trade_url,
     }]
     assert result["registry_health"]["shadow_evaluation"][0]["status"] == "executable"
+    buffered = asyncio.run(main.get_profit_routes(
+        "Test",
+        category="DivinationCard",
+        budget_chaos=50,
+        horizon_hours=24,
+        minimum_safe_profit_chaos=3,
+        execution_bias_percent=10,
+    ))["routes"][0]
+    assert buffered["batch_plan"]["set_count"] == 1
+    assert buffered["batch_plan"]["executable_cost_chaos"] == pytest.approx(26.4)
+    assert buffered["batch_plan"]["executable_revenue_chaos"] == pytest.approx(29.925)
+    assert buffered["safe_edge_chaos"] == pytest.approx(3.525)
+    assert buffered["safe_edge_adjustments"]["execution_bias_rate"] == pytest.approx(.1)
 
 
 @pytest.mark.parametrize(("name", "value"), [
@@ -424,6 +437,20 @@ def test_budgeted_route_returns_reconciled_manual_batch_plan(monkeypatch):
 ])
 def test_profit_routes_rejects_invalid_planning_inputs(name, value):
     with pytest.raises(main.HTTPException, match="finite positive"):
+        asyncio.run(main.get_profit_routes("Test", **{name: value}))
+
+
+@pytest.mark.parametrize(("name", "value"), [
+    ("minimum_safe_profit_chaos", -1),
+    ("minimum_safe_profit_chaos", float("inf")),
+    ("minimum_safe_profit_chaos", True),
+    ("execution_bias_percent", -1),
+    ("execution_bias_percent", 100),
+    ("execution_bias_percent", float("nan")),
+    ("execution_bias_percent", True),
+])
+def test_profit_routes_rejects_invalid_safety_inputs(name, value):
+    with pytest.raises(main.HTTPException, match=name):
         asyncio.run(main.get_profit_routes("Test", **{name: value}))
 
 def test_actual_recipe_snapshot_ids_produce_theoretical_route(monkeypatch):
@@ -964,7 +991,121 @@ def test_quote_outside_one_day_window_is_not_executable():
         (now - strategies._EXECUTION_QUOTE_MAX_AGE - strategies.timedelta(seconds=1)).isoformat(),
         (now + strategies.timedelta(seconds=1)).isoformat(),
     ):
-        assert strategies._quote_info({"item": {
-            "buy_levels": [{"price": 1, "quantity": 1}], "observed_at": observed_at,
-            "confidence": 1, "source": "test",
-        }}, "item", side="buy") is None
+        quote, evidence = strategies._quote_info(
+            {"item": {
+                "buy_levels": [{"price": 1, "quantity": 1}], "observed_at": observed_at,
+                "confidence": 1, "source": "test",
+            }},
+            "item", side="buy", role="input",
+        )
+        assert quote is None
+        assert evidence["freshness_state"] in {"stale", "future"}
+        assert evidence["blocker"]
+
+
+def test_blocked_quote_evidence_uses_only_quote_metadata():
+    observed_at = datetime.now(timezone.utc).isoformat()
+    quote, evidence = strategies._quote_info(
+        {"item": {
+            "buy_levels": [{"price": 1, "quantity": 1}],
+            "observed_at": observed_at,
+            "confidence": .7,
+            "source": "pathofexile_trade_api",
+            "stale": True,
+        }},
+        "item", side="buy", role="input",
+    )
+    assert quote is None
+    assert evidence == {
+        "market_key": "item",
+        "role": "input",
+        "quote_side": "buy",
+        "source": "pathofexile_trade_api",
+        "observation_type": None,
+        "observed_at": observed_at,
+        "market_timestamp": None,
+        "confidence_grade": None,
+        "confidence": .7,
+        "quote_kind": "seller_ask_depth",
+        "freshness_state": "stale",
+        "max_age_hours": 2,
+        "blocker": "item: pathofexile_trade_api marked quote stale; stale quotes hard-block execution",
+    }
+
+
+def test_execution_bias_reconciles_route_and_batch_plan():
+    context = market_context()
+    context["execution_bias_rate"] = 0.1
+    route = DivinationCardStrategyProvider(
+        DivCardRegistry([recipe()], version="3.0", source="test")
+    ).evaluate(context)[0]
+
+    assert route.total_input_cost == pytest.approx(26.4)
+    assert route.realistic_output_value == pytest.approx(29.925)
+    assert route.safe_edge_chaos == pytest.approx(3.525)
+    assert route.batch_plan.executable_cost_chaos == pytest.approx(route.total_input_cost)
+    assert route.batch_plan.executable_revenue_chaos == pytest.approx(route.realistic_output_value)
+    assert route.batch_plan.executable_net_chaos == pytest.approx(route.safe_edge_chaos)
+    assert route.safe_edge_adjustments["explicit_fees_chaos"] == pytest.approx(1.75)
+    assert route.safe_edge_adjustments["execution_bias_chaos"] == pytest.approx(5.725)
+
+
+def test_minimum_safe_profit_keeps_ladder_until_larger_batch_passes():
+    context = market_context(bankroll=20)
+    context["execution_prices"]["DivinationCard:test-card"]["buy_levels"][0]["quantity"] = 8
+    context["execution_prices"]["Currency:test-orb"]["sell_levels"][0]["quantity"] = 20
+    context["minimum_safe_profit_chaos"] = 15
+    route = DivinationCardStrategyProvider(
+        DivCardRegistry([recipe(max_batch=2)], version="3.0", source="test")
+    ).evaluate(context)[0]
+
+    assert route.safe_edge_chaos == pytest.approx(9.25)
+    assert route.status == "executable"
+    assert route.market_capacity == route.recommended_capacity == 2
+    assert route.batch_plan.set_count == 2
+    assert route.batch_plan.executable_net_chaos == pytest.approx(18.5)
+
+
+
+
+def test_minimum_safe_profit_above_every_batch_reports_zero_safe_capacity():
+    context = market_context(bankroll=20)
+    context["execution_prices"]["DivinationCard:test-card"]["buy_levels"][0]["quantity"] = 8
+    context["execution_prices"]["Currency:test-orb"]["sell_levels"][0]["quantity"] = 20
+    context["minimum_safe_profit_chaos"] = 100
+    route = DivinationCardStrategyProvider(
+        DivCardRegistry([recipe(max_batch=2)], version="3.0", source="test")
+    ).evaluate(context)[0]
+
+    assert route.status == "non_executable"
+    assert route.market_capacity == route.recommended_capacity == 0
+    assert route.batch_plan is None
+
+
+def test_stale_source_quote_names_leg_and_hard_blocks_execution():
+    context = market_context()
+    stale_at = (
+        datetime.now(timezone.utc)
+        - strategies._EXECUTION_QUOTE_MAX_AGE_BY_SOURCE["pathofexile_trade_api"]
+        - strategies.timedelta(seconds=1)
+    ).isoformat()
+    context["execution_prices"]["DivinationCard:test-card"].update(
+        source="pathofexile_trade_api",
+        observed_at=stale_at,
+        observation_type="DIRECT_OBSERVATION",
+        market_timestamp=stale_at,
+        confidence_grade="A",
+    )
+    route = DivinationCardStrategyProvider(
+        DivCardRegistry([recipe()], version="3.0", source="test")
+    ).evaluate(context)[0]
+
+    leg = next(item for item in route.evidence_legs if item.market_key == "DivinationCard:test-card")
+    assert route.status == "theoretical"
+    assert route.market_capacity == 0
+    assert route.certainty == strategies.RouteCertainty.DETERMINISTIC
+    assert route.historical_confidence is None
+    assert leg.freshness_state == "stale"
+    assert leg.observed_at == stale_at
+    assert leg.max_age_hours == 2
+    assert "stale quotes hard-block execution" in leg.blocker

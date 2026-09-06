@@ -1,6 +1,21 @@
 # Changelog
 ## Unreleased
 
+## 0.7.0 — 2026-09-06
+
+### Added
+
+- Added per-leg route evidence with exact market identity, quote side, source, observation metadata, confidence, freshness policy, and blocker details.
+- Added distinct route certainty, pricing, liquidity, and nullable historical confidence fields without treating deterministic mechanics as historical proof.
+- Added user-set minimum safe profit per evaluated batch and conservative execution-bias controls to Profit Routes.
+
+### Changed
+
+- Applied execution bias before route budget, capacity, and batch-plan calculations, with reconciled cost, revenue, and safe net.
+- Made stale execution quotes hard-block actionable capacity under source-specific freshness limits rather than inventing a numeric stale-price penalty.
+- Exposed safe-edge adjustments for cumulative depth, fees, conversion/friction, output discounts, listing-haircut treatment, and manual execution bias.
+
+
 ### Fixed
 
 - Kept Currency Exchange cursors in place when storage safety blocks an hourly write while still advancing past idempotently stored hours.
@@ -9,6 +24,10 @@
 - Stopped Explorer detail loading when a league, category, or item selection is cleared.
 - Isolated blocked legacy Divine paper-ledger migration from unrelated database access, failed closed on those portfolios, and retried conversion after an observed Divine rate arrives.
 - Matched opportunity backtests to the current liquidity tier and every historical cohort dimension instead of borrowing a larger unrelated cohort.
+
+### Release
+
+- Released `0.7.0` with Phase 3 margin-of-safety and route-evidence contracts.
 
 ## 0.6.2 — 2026-09-05
 
