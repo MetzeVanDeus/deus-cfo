@@ -269,6 +269,25 @@ def test_category_sweep_stops_before_storage_headroom_is_exhausted(monkeypatch):
     assert calls == ["prune"]
 
 
+def test_collector_cycle_skips_cx_poll_when_storage_is_blocked(monkeypatch):
+    polled = []
+
+    async def collect(_league):
+        return {}
+
+    async def poll():
+        polled.append(True)
+        return 1
+
+    monkeypatch.setattr(collector, "configured_league", lambda _league: "Allflame")
+    monkeypatch.setattr(collector, "collect_all_categories", collect)
+    monkeypatch.setattr(collector.database, "collection_allowed", lambda: False)
+    monkeypatch.setattr(collector.cx_collector, "poll_latest_cx", poll)
+
+    asyncio.run(collector.run_collector(once=True))
+    assert polled == []
+
+
 
 def test_snapshot_skips_malformed_rows_without_losing_valid_rows(monkeypatch):
     inserted = []

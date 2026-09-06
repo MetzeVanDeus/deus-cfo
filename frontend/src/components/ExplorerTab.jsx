@@ -30,7 +30,15 @@ export function ExplorerTab({ categories, selectedLeague, historyHours = 24 }) {
     return () => { cancelled = true }
   }, [selectedLeague, selectedCategory])
   useEffect(() => {
-    if (!selectedLeague || !selectedCategory || !selectedItem) return
+    if (!selectedLeague || !selectedCategory || !selectedItem) {
+      setLoadingDetail(false)
+      setError('')
+      setHistory([])
+      setRegime(null)
+      setStats(null)
+      setItemData(null)
+      return
+    }
     let cancelled = false
     setLoadingDetail(true)
     setError('')
@@ -99,15 +107,15 @@ export function ExplorerTab({ categories, selectedLeague, historyHours = 24 }) {
 function PriceCard({ history, itemData }) {
   const prices = history.map(h => h.price).filter(p => p != null)
   const current = prices.length > 0 ? prices[prices.length - 1] : (itemData?.price_chaos ?? null)
-  const first = prices.length > 1 ? prices[0] : current
-  const changePct = first && current ? ((current - first) / first) * 100 : 0
-  const isUp = changePct >= 0
+  const first = prices.length > 1 ? prices[0] : null
+  const changePct = first && current ? ((current - first) / first) * 100 : null
+  const isUp = changePct != null && changePct >= 0
   return (
     <section className="terminal-panel">
       <div className="panel-title"><h2>Current Price</h2></div>
       <div className="metric-grid">
         <div className="metric"><span>Price (chaos)</span><strong>{fmtPrice(current)}</strong></div>
-        <div className="metric"><span>Change</span><strong className={isUp ? 'positive' : 'negative'}>{fmtPct(changePct)}</strong></div>
+        <div className="metric"><span>Change</span><strong className={changePct == null ? '' : isUp ? 'positive' : 'negative'}>{fmtPct(changePct)}</strong></div>
         {itemData && <div className="metric"><span>Volume</span><strong>{fmtVol(itemData.volume)}</strong></div>}
       </div>
     </section>

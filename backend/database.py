@@ -19,6 +19,7 @@ if _DATA_DIR:
 DB_PATH = os.path.join(_DATA_DIR, "deuscfo.db") if _DATA_DIR else _DEFAULT_DB_PATH
 _schema_lock = asyncio.Lock()
 _schema_path: str | None = None
+_paper_migration_path: str | None = None
 MAX_DATABASE_BYTES = 600 * 1024 * 1024
 MAX_WAL_BYTES = 32 * 1024 * 1024
 SNAPSHOT_RETENTION_DAYS = 14
@@ -197,16 +198,16 @@ CREATE INDEX IF NOT EXISTS idx_paper_equity_portfolio
 
 
 
-async def _migrate_paper_units(db: aiosqlite.Connection) -> None:
+async def _migrate_paper_units(db: aiosqlite.Connection) -> bool:
     """Convert safe legacy paper ledgers from Divine values to Chaos values once."""
     cursor = await db.execute("PRAGMA user_version")
     if int((await cursor.fetchone())[0]) >= 5:
-        return
+        return True
     portfolios = await (await db.execute("SELECT * FROM paper_portfolios ORDER BY id")).fetchall()
     if not any(portfolio["currency"] != "Chaos" for portfolio in portfolios):
         await db.execute("PRAGMA user_version = 5")
         await db.commit()
-        return
+        return True
     rate_cursor = await db.execute(
         """SELECT price_chaos FROM snapshots
            WHERE lower(item_id) = 'divine' AND price_chaos > 0
@@ -215,7 +216,7 @@ async def _migrate_paper_units(db: aiosqlite.Connection) -> None:
     rate_row = await rate_cursor.fetchone()
     current_rate = float(rate_row["price_chaos"]) if rate_row else None
     if not current_rate or current_rate <= 0:
-        raise RuntimeError("cannot migrate Divine paper ledgers without an observed Divine rate")
+        return False
     for portfolio in portfolios:
         if portfolio["currency"] == "Chaos":
             continue
@@ -342,6 +343,7 @@ async def _migrate_paper_units(db: aiosqlite.Connection) -> None:
         raise RuntimeError("paper unit migration left Divine portfolios unconverted")
     await db.execute("PRAGMA user_version = 5")
     await db.commit()
+    return True
 
 def validate_execution_quote(value) -> dict | None:
     """Return a safe depth quote or None; aggregate rows remain quote-free."""
@@ -488,7 +490,7 @@ async def _ensure_columns(db: aiosqlite.Connection, table: str, columns: dict[st
 
 async def get_db() -> aiosqlite.Connection:
     """Open a connection, creating the schema and additive columns safely."""
-    global _schema_path
+    global _schema_path, _paper_migration_path
     db = await aiosqlite.connect(DB_PATH)
     db.row_factory = aiosqlite.Row
     try:
@@ -571,8 +573,13 @@ async def get_db() -> aiosqlite.Connection:
                            ON paper_equity (trade_id) WHERE trade_id IS NOT NULL"""
                     )
                     await db.commit()
-                    await _migrate_paper_units(db)
+                    migrated = await _migrate_paper_units(db)
                     _schema_path = DB_PATH
+                    _paper_migration_path = None if migrated else DB_PATH
+        elif _paper_migration_path == DB_PATH:
+            async with _schema_lock:
+                if _paper_migration_path == DB_PATH and await _migrate_paper_units(db):
+                    _paper_migration_path = None
         page_size = int((await (await db.execute("PRAGMA page_size")).fetchone())[0])
         await db.execute(f"PRAGMA max_page_count={MAX_DATABASE_BYTES // page_size}")
         await db.execute(f"PRAGMA journal_size_limit={MAX_WAL_BYTES}")
@@ -695,15 +702,16 @@ async def db_file_size() -> int:
         return 0
 
 
-async def insert_cx_hour(records: list[dict], timestamp: str) -> int:
-    """Insert one hour of currency-exchange markets. Returns inserted row count.
+async def insert_cx_hour(records: list[dict], timestamp: str) -> int | None:
+    """Insert one CX hour, returning ``None`` only when collection is blocked.
 
-    Idempotent on (realm, league, timestamp, market_id) via ON CONFLICT.
+    Zero remains a successful idempotent insert, so callers may advance past
+    an hour whose rows were already stored.
     """
     if not records:
         return 0
     if not collection_allowed():
-        return 0
+        return None
     observed = now_iso()
     db = await get_db()
     try:

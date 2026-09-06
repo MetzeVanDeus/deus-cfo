@@ -229,11 +229,7 @@ async def open_paper_position(portfolio_id: int, opportunity_id: str, quantity: 
     db = await database.get_db()
     try:
         await db.execute("BEGIN IMMEDIATE")
-        portfolio_cursor = await db.execute(
-            "SELECT id FROM paper_portfolios WHERE id = ?", (portfolio_id,)
-        )
-        if await portfolio_cursor.fetchone() is None:
-            raise ValueError("paper portfolio not found")
+        await _require_portfolio(db, portfolio_id)
         equity_cursor = await db.execute(
             "SELECT equity FROM paper_equity WHERE portfolio_id = ? ORDER BY id DESC LIMIT 1",
             (portfolio_id,),
@@ -266,11 +262,7 @@ async def paper_portfolio_status(portfolio_id: int) -> dict[str, Any]:
     """Return current equity, deployed capital, liquid capital, and open count."""
     db = await database.get_db()
     try:
-        portfolio_cursor = await db.execute(
-            "SELECT id FROM paper_portfolios WHERE id = ?", (portfolio_id,)
-        )
-        if await portfolio_cursor.fetchone() is None:
-            raise ValueError("paper portfolio not found")
+        await _require_portfolio(db, portfolio_id)
         equity_cursor = await db.execute(
             "SELECT equity FROM paper_equity WHERE portfolio_id = ? ORDER BY id DESC LIMIT 1",
             (portfolio_id,),
@@ -356,6 +348,7 @@ async def realize_paper_position(
         position = await cursor.fetchone()
         if position is None:
             raise ValueError("paper position not found")
+        await _require_portfolio(db, int(position["portfolio_id"]))
         existing_cursor = await db.execute(
             "SELECT * FROM trade_records WHERE position_id = ? ORDER BY id LIMIT 1",
             (position_id,),
@@ -484,6 +477,7 @@ async def correct_linked_trade(
         )).fetchone()
         if trade is None or trade["position_id"] is None or trade["portfolio_id"] is None:
             raise ValueError("linked trade not found")
+        await _require_portfolio(db, int(trade["portfolio_id"]))
         position = await (await db.execute(
             "SELECT * FROM paper_positions WHERE id = ?", (trade["position_id"],)
         )).fetchone()
@@ -538,6 +532,7 @@ async def correct_linked_trade(
 async def paper_equity_curve(portfolio_id: int) -> list[dict[str, Any]]:
     db = await database.get_db()
     try:
+        await _require_portfolio(db, portfolio_id)
         cursor = await db.execute("SELECT * FROM paper_equity WHERE portfolio_id = ? ORDER BY id", (portfolio_id,))
         return [dict(row) for row in await cursor.fetchall()]
     finally:
@@ -548,8 +543,14 @@ async def trade_records(portfolio_id: int | None = None) -> list[dict[str, Any]]
     db = await database.get_db()
     try:
         if portfolio_id is None:
-            cursor = await db.execute("SELECT * FROM trade_records ORDER BY id")
+            cursor = await db.execute(
+                """SELECT t.* FROM trade_records t
+                   LEFT JOIN paper_portfolios p ON p.id = t.portfolio_id
+                   WHERE t.portfolio_id IS NULL OR p.currency = 'Chaos'
+                   ORDER BY t.id"""
+            )
         else:
+            await _require_portfolio(db, portfolio_id)
             cursor = await db.execute(
                 "SELECT * FROM trade_records WHERE portfolio_id = ? ORDER BY id",
                 (portfolio_id,),
@@ -589,13 +590,15 @@ async def calibrate_opportunity(
     db = await database.get_db()
     try:
         cursor = await db.execute(
-            """SELECT actual_entry_price, quantity, chaos_per_divine,
-                      capital_currency, realized_profit, actual_duration_hours
-               FROM trade_records
-               WHERE opportunity_id = ?
-                 AND realized_profit IS NOT NULL
-                 AND actual_duration_hours IS NOT NULL
-               ORDER BY id""",
+            """SELECT t.actual_entry_price, t.quantity, t.chaos_per_divine,
+                      t.capital_currency, t.realized_profit, t.actual_duration_hours
+               FROM trade_records t
+               LEFT JOIN paper_portfolios p ON p.id = t.portfolio_id
+               WHERE t.opportunity_id = ?
+                 AND t.realized_profit IS NOT NULL
+                 AND t.actual_duration_hours IS NOT NULL
+                 AND (t.portfolio_id IS NULL OR p.currency = 'Chaos')
+               ORDER BY t.id""",
             (opportunity_id,),
         )
         rows = await cursor.fetchall()
@@ -809,9 +812,14 @@ async def paper_performance(portfolio_id: int) -> dict[str, Any]:
 
 
 async def _require_portfolio(db: Any, portfolio_id: int) -> None:
-    cursor = await db.execute("SELECT id FROM paper_portfolios WHERE id = ?", (portfolio_id,))
-    if await cursor.fetchone() is None:
+    cursor = await db.execute(
+        "SELECT currency FROM paper_portfolios WHERE id = ?", (portfolio_id,)
+    )
+    portfolio = await cursor.fetchone()
+    if portfolio is None:
         raise ValueError("paper portfolio not found")
+    if portfolio["currency"] != "Chaos":
+        raise ValueError("paper portfolio is waiting for Divine-to-Chaos migration")
 
 
 def _parse_time(value: str) -> datetime:

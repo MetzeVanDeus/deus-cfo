@@ -2,8 +2,10 @@ import asyncio
 import sqlite3
 
 import aiosqlite
+import pytest
 
 import database
+import portfolio
 
 
 def test_concurrent_get_db_migrates_current_shaped_database(tmp_path, monkeypatch):
@@ -220,7 +222,12 @@ def test_market_writes_stop_at_project_safety_threshold(tmp_path, monkeypatch):
     }
 
     assert asyncio.run(database.insert_snapshots([record])) == 0
+    assert asyncio.run(database.insert_cx_hour([{
+        "league": "Allflame", "market_id": "chaos|divine",
+        "item_a": "chaos", "item_b": "divine",
+    }], "2026-01-01T00:00:00+00:00")) is None
     assert not path.exists()
+
 def test_paper_migration_converts_realized_equity_curve(tmp_path, monkeypatch):
     path = tmp_path / "legacy-paper.db"
     monkeypatch.setattr(database, "DB_PATH", str(path))
@@ -278,6 +285,75 @@ def test_paper_migration_converts_realized_equity_curve(tmp_path, monkeypatch):
         {"equity": 1100, "realized_profit": 100},
     ]
     assert position["entry_price"] == 160
+
+
+def test_missing_divine_rate_isolates_paper_and_retries_after_snapshot(tmp_path, monkeypatch):
+    path = tmp_path / "blocked-paper.db"
+    monkeypatch.setattr(database, "DB_PATH", str(path))
+    database._schema_path = None
+    database._paper_migration_path = None
+
+    async def run():
+        db = await database.get_db()
+        legacy = await db.execute(
+            "INSERT INTO paper_portfolios (name, initial_bankroll, currency, created_at) "
+            "VALUES ('legacy', 10, 'Divine', '2026-01-01T00:00:00+00:00')"
+        )
+        await db.execute(
+            "INSERT INTO paper_equity (portfolio_id, timestamp, equity, realized_profit, source) "
+            "VALUES (?, '2026-01-01T00:00:00+00:00', 10, 0, 'initial')",
+            (legacy.lastrowid,),
+        )
+        position = await db.execute(
+            "INSERT INTO paper_positions "
+            "(portfolio_id, opportunity_id, quantity, entry_price, opened_at) "
+            "VALUES (?, 'legacy', 1, 2, '2026-01-01T00:00:00+00:00')",
+            (legacy.lastrowid,),
+        )
+        trade = await db.execute(
+            "INSERT INTO trade_records "
+            "(portfolio_id, position_id, opportunity_id, recorded_at) "
+            "VALUES (?, ?, 'legacy', '2026-01-01T01:00:00+00:00')",
+            (legacy.lastrowid, position.lastrowid),
+        )
+        await db.execute("PRAGMA user_version = 0")
+        await db.commit()
+        await db.close()
+
+        database._schema_path = None
+        db = await database.get_db()
+        assert (await (await db.execute("SELECT COUNT(*) FROM snapshots")).fetchone())[0] == 0
+        await db.close()
+
+        blocked_calls = [
+            portfolio.paper_portfolio_status(legacy.lastrowid),
+            portfolio.paper_equity_curve(legacy.lastrowid),
+            portfolio.trade_records(legacy.lastrowid),
+            portfolio.paper_positions(legacy.lastrowid),
+            portfolio.paper_performance(legacy.lastrowid),
+            portfolio.open_paper_position(legacy.lastrowid, "new", 1, 1),
+            portfolio.realize_paper_position(position.lastrowid, 3),
+            portfolio.correct_linked_trade(trade.lastrowid, 1, 2, 3, 1),
+        ]
+        for call in blocked_calls:
+            with pytest.raises(ValueError, match="waiting for Divine-to-Chaos migration"):
+                await call
+
+        current = await portfolio.create_paper_portfolio(5, 100)
+        assert (await portfolio.paper_portfolio_status(current))["currency"] == "Chaos"
+        assert await database.insert_snapshots([{
+            "league": "Allflame", "category": "Currency", "item_id": "divine",
+            "item_name": "Divine Orb", "price_chaos": 100,
+        }], "2026-01-02T00:00:00+00:00") == 1
+
+        migrated = await portfolio.paper_portfolio_status(legacy.lastrowid)
+        assert migrated["currency"] == "Chaos"
+        assert migrated["equity"] == 1000
+        db = await database.get_db()
+        assert (await (await db.execute("PRAGMA user_version")).fetchone())[0] == 5
+        await db.close()
+
+    asyncio.run(run())
 
 def test_collection_guard_counts_database_outside_project(tmp_path, monkeypatch):
     project = tmp_path / "project"

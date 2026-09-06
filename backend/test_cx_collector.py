@@ -71,6 +71,18 @@ def test_poll_advances_progress_on_new_data(monkeypatch):
     assert progress == [2]
 
 
+def test_poll_keeps_cursor_when_storage_is_blocked(monkeypatch):
+    progress, _ = _install(monkeypatch, [{"market": 1}], stored=None)
+    assert asyncio.run(cx_collector.poll_latest_cx()) == 0
+    assert progress == []
+
+
+def test_poll_advances_past_already_stored_hour(monkeypatch):
+    progress, _ = _install(monkeypatch, [{"market": 1}], stored=0)
+    assert asyncio.run(cx_collector.poll_latest_cx()) == 0
+    assert progress == [2]
+
+
 def test_poll_does_not_advance_when_already_up_to_date(monkeypatch):
     progress, _ = _install(monkeypatch, [{"market": 1}], stored=0, ncid=1)
     assert asyncio.run(cx_collector.poll_latest_cx()) == 0
@@ -81,6 +93,12 @@ def test_backfill_processes_hours_and_advances(monkeypatch):
     progress, _ = _install(monkeypatch, [{"market": 1}], stored=1)
     assert asyncio.run(cx_collector.backfill_currency_exchange(max_hours=1)) == 1
     assert progress == [2]
+
+
+def test_backfill_keeps_cursor_when_storage_is_blocked(monkeypatch):
+    progress, _ = _install(monkeypatch, [{"market": 1}], stored=None)
+    assert asyncio.run(cx_collector.backfill_currency_exchange(max_hours=1)) == 0
+    assert progress == []
 
 
 def test_backfill_starts_at_requested_recent_window_without_saved_cursor(monkeypatch):

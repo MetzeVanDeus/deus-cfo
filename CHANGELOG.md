@@ -1,5 +1,15 @@
 # Changelog
 ## Unreleased
+
+### Fixed
+
+- Kept Currency Exchange cursors in place when storage safety blocks an hourly write while still advancing past idempotently stored hours.
+- Cleared league-bound CFO, Flip Finder, and Strategies results on shared-league changes, including late asynchronous responses and stale paper actions.
+- Showed unavailable Explorer price changes as `—` instead of inventing a positive `0.0%`.
+- Stopped Explorer detail loading when a league, category, or item selection is cleared.
+- Isolated blocked legacy Divine paper-ledger migration from unrelated database access, failed closed on those portfolios, and retried conversion after an observed Divine rate arrives.
+- Matched opportunity backtests to the current liquidity tier and every historical cohort dimension instead of borrowing a larger unrelated cohort.
+
 ## 0.6.2 — 2026-09-05
 
 ### Fixed

@@ -87,6 +87,8 @@ On first run, choose a live league in **Shared market context** and save it. The
 
 The collector first gathers current poe.ninja snapshots. Historical views become useful as observations accumulate. The **Data readiness** panel shows stored rows, observed hours, missing intervals, and the last snapshot; it also starts bounded Currency Exchange backfill. The CFO defaults to **PAPER** and may show clearly labeled, low-confidence Currency Exchange mean-reversion watches from direct hourly quotes; validated capital positions remain behind the existing evidence gates. A first run can therefore show no signals or routes for a while. `WAIT` is a valid result when history, liquidity, patch evidence, or strategy coverage is insufficient. No demo data is inserted.
 
+Legacy Divine-denominated paper portfolios stay unavailable until an observed Divine Orb price permits safe conversion to Chaos; market collection and new Chaos paper portfolios continue meanwhile, and conversion retries automatically.
+
 ## What it helps with
 
 - **Research:** inspect price history, regimes, anomalies, and evidence coverage.

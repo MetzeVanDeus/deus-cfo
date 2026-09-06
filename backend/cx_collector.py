@@ -150,8 +150,8 @@ def _wanted_league_present(data: dict, wanted_leagues: set[str]) -> bool:
     )
 
 
-async def store_cx_hour(data: dict, wanted_leagues: set[str]) -> int:
-    """Parse a response and store its (filtered) markets. Returns entries stored."""
+async def store_cx_hour(data: dict, wanted_leagues: set[str]) -> int | None:
+    """Parse a response and store its filtered markets."""
     ts, records = _parse_hour(data, wanted_leagues)
     return await database.insert_cx_hour(records, ts)
 
@@ -203,6 +203,9 @@ async def backfill_currency_exchange(max_hours: int = _BACKFILL_DEFAULT_HOURS) -
                 log.warning("cx backfill: wanted league payload had no valid records at %s; retrying later", ncid)
                 break
             stored = await database.insert_cx_hour(records, ts) if records else 0
+            if stored is None:
+                log.warning("cx backfill: collection paused before storing change_id=%s", ncid)
+                break
             if last is None and first_change_id is None:
                 first_change_id = ncid
                 first_hour = ts
@@ -308,6 +311,9 @@ async def poll_latest_cx() -> int:
             log.warning("cx poll: wanted league payload had no valid records at %s; retrying later", ncid)
             return 0
         stored = await database.insert_cx_hour(records, ts) if records else 0
+        if stored is None:
+            log.warning("cx poll: collection paused before storing change_id=%s", ncid)
+            return 0
         await database.set_cx_progress("default", ncid, last_synced_hour=ts)
     except Exception:
         log.exception("cx poll: store failed at change_id=%s", ncid)

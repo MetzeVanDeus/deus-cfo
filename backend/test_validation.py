@@ -151,7 +151,7 @@ def test_opportunity_factories_use_requested_analysis_window(monkeypatch):
             "price_median": 90, "explanation": "",
         }]
 
-    async def attach_outcomes(opportunities, *, include_feedback=True):
+    async def attach_outcomes(opportunities, _latest, *, include_feedback=True):
         for item in opportunities:
             item.expected_return = 10
             item.win_probability = .8
@@ -252,6 +252,7 @@ def test_historical_return_estimator_uses_median_for_reconstructed_only(monkeypa
     )
     result = {"groups": [{
         "category": "Currency", "source": "regime", "signal_type": "Trending Up",
+        "liquidity_tier": "medium", "opportunity_type": "regime",
         "horizons": {"24": {
             "sample_size": 3, "median_return": 2, "mean_return": 1000,
             "win_probability": .7, "p10_return": -1, "historical_confidence": .6,
@@ -262,37 +263,65 @@ def test_historical_return_estimator_uses_median_for_reconstructed_only(monkeypa
     async def fake_backtest(*args, **kwargs):
         return result
     monkeypatch.setattr(opportunity.validation, "backtest", fake_backtest)
-    asyncio.run(opportunity._attach_historical_outcomes([opp]))
+    asyncio.run(opportunity._attach_historical_outcomes(
+        [opp], {("Currency", "item"): {"volume": 100}}
+    ))
     assert opp.expected_return == 2
     assert opp.historical_context["return_estimator"] == "median"
     normalized = opp.to_investable(chaos_per_divine=100, paper_only=True)
     assert normalized.expected_return == 2
     assert normalized.metadata["return_estimator"] == "median"
 
-def test_historical_outcome_does_not_let_empty_liquidity_bucket_win(monkeypatch):
+def test_historical_outcome_matches_current_liquidity_tier(monkeypatch):
     opp = opportunity.Opportunity(
         type="regime", detector_id="Trending Up", item_id="item", item_name="Item",
         category="Currency", league="Test", what_happened="", why_it_matters="",
         possible_action="", confidence=.8, signals={}, historical_context={},
         timestamp="2026-01-01T00:00:00+00:00",
     )
-    summary = {
-        "sample_size": 3, "median_return": 2, "mean_return": 2,
-        "win_probability": 1, "p10_return": 2, "historical_confidence": .4,
-        "return_samples": [1, 2, 3], "evidence_sources": {"observed": 3},
-        "reconstructed_sample_size": 0,
-    }
-    result = {"groups": [
-        {"category": "Currency", "source": "regime", "signal_type": "Trending Up",
-         "horizons": {"24": summary}},
-        {"category": "Currency", "source": "regime", "signal_type": "Trending Up",
-         "horizons": {"24": {"sample_size": 0}}},
-    ]}
+    def group(tier, expected_return, sample_size):
+        return {
+            "category": "Currency", "source": "regime", "signal_type": "Trending Up",
+            "liquidity_tier": tier, "opportunity_type": "regime",
+            "horizons": {"24": {
+                "sample_size": sample_size, "median_return": expected_return,
+                "mean_return": expected_return, "win_probability": 1,
+                "p10_return": expected_return, "historical_confidence": .4,
+                "return_samples": [expected_return] * sample_size,
+                "evidence_sources": {"observed": sample_size},
+                "reconstructed_sample_size": 0,
+            }},
+        }
+    async def fake_backtest(*args, **kwargs):
+        return {"groups": [group("high", 99, 20), group("low", 2, 3)]}
+    monkeypatch.setattr(opportunity.validation, "backtest", fake_backtest)
+    asyncio.run(opportunity._attach_historical_outcomes(
+        [opp], {("Currency", "item"): {"volume": 10}}
+    ))
+    assert opp.expected_return == 2
+    assert opp.sample_size == 3
+
+
+def test_historical_outcome_fails_closed_without_matching_tier(monkeypatch):
+    opp = opportunity.Opportunity(
+        type="regime", detector_id="Trending Up", item_id="item", item_name="Item",
+        category="Currency", league="Test", what_happened="", why_it_matters="",
+        possible_action="", confidence=.8, signals={}, historical_context={},
+        timestamp="2026-01-01T00:00:00+00:00",
+    )
+    result = {"groups": [{
+        "category": "Currency", "source": "regime", "signal_type": "Trending Up",
+        "liquidity_tier": "high", "opportunity_type": "regime",
+        "horizons": {"24": {"sample_size": 20, "mean_return": 99}},
+    }]}
     async def fake_backtest(*args, **kwargs):
         return result
     monkeypatch.setattr(opportunity.validation, "backtest", fake_backtest)
-    asyncio.run(opportunity._attach_historical_outcomes([opp]))
-    assert opp.expected_return == 2
+    asyncio.run(opportunity._attach_historical_outcomes(
+        [opp], {("Currency", "item"): {"volume": 10}}
+    ))
+    assert opp.expected_return is None
+    assert opp.sample_size == 0
 
 def test_historical_return_estimator_keeps_mean_for_direct_observed(monkeypatch):
     opp = opportunity.Opportunity(
@@ -303,6 +332,7 @@ def test_historical_return_estimator_keeps_mean_for_direct_observed(monkeypatch)
     )
     result = {"groups": [{
         "category": "Currency", "source": "regime", "signal_type": "Trending Up",
+        "liquidity_tier": "medium", "opportunity_type": "regime",
         "horizons": {"24": {
             "sample_size": 3, "median_return": 2, "mean_return": 1000,
             "win_probability": .7, "p10_return": -1, "historical_confidence": .6,
@@ -313,7 +343,9 @@ def test_historical_return_estimator_keeps_mean_for_direct_observed(monkeypatch)
     async def fake_backtest(*args, **kwargs):
         return result
     monkeypatch.setattr(opportunity.validation, "backtest", fake_backtest)
-    asyncio.run(opportunity._attach_historical_outcomes([opp]))
+    asyncio.run(opportunity._attach_historical_outcomes(
+        [opp], {("Currency", "item"): {"volume": 100}}
+    ))
     assert opp.expected_return == 1000
     assert opp.historical_context["return_estimator"] == "mean"
  
@@ -326,6 +358,7 @@ def test_historical_return_estimator_uses_median_for_mixed_reconstruction(monkey
     )
     result = {"groups": [{
         "category": "Currency", "source": "regime", "signal_type": "Trending Up",
+        "liquidity_tier": "medium", "opportunity_type": "regime",
         "horizons": {"24": {
             "sample_size": 3, "median_return": 2, "mean_return": 1000,
             "win_probability": .7, "p10_return": -1, "historical_confidence": .6,
@@ -337,7 +370,9 @@ def test_historical_return_estimator_uses_median_for_mixed_reconstruction(monkey
     async def fake_backtest(*args, **kwargs):
         return result
     monkeypatch.setattr(opportunity.validation, "backtest", fake_backtest)
-    asyncio.run(opportunity._attach_historical_outcomes([opp]))
+    asyncio.run(opportunity._attach_historical_outcomes(
+        [opp], {("Currency", "item"): {"volume": 100}}
+    ))
     assert opp.expected_return == 2
     assert opp.historical_context["return_estimator"] == "median"
     normalized = opp.to_investable(chaos_per_divine=100)
