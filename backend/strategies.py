@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import statistics
 from dataclasses import dataclass
 from fractions import Fraction
 from datetime import datetime, timedelta, timezone
@@ -15,7 +16,7 @@ from typing import Any, Mapping, Protocol, Sequence
 import validation
 from pydantic import BaseModel, Field
 
-from opportunity import InvestableOpportunity
+from opportunity import InvestableOpportunity, empirical_tier
 
 _EXECUTION_QUOTE_MAX_AGE = timedelta(hours=24)
 _EXECUTION_QUOTE_MAX_AGE_BY_SOURCE = {
@@ -159,6 +160,7 @@ class ProfitRoute(BaseModel):
         max_batch: int = 1,
         bankroll: float = 0.0,
         chaos_per_divine: float = 1.0,
+        evidence: Mapping[str, Any] | None = None,
     ) -> InvestableOpportunity:
         """Adapt this route to the existing allocator contract."""
         if chaos_per_divine <= 0:
@@ -167,10 +169,27 @@ class ProfitRoute(BaseModel):
         now = datetime.now(timezone.utc)
         expires_at = (now + timedelta(hours=duration)).isoformat(timespec="seconds")
         created_at = now.isoformat(timespec="seconds")
-        entry_chaos = self.total_input_cost
-        exit_chaos = self.realistic_output_value
-        expected_profit_chaos = self.expected_net_profit
+        evidence = dict(evidence or {})
+        returns = [float(value) for value in evidence.get("return_samples_percent", ())]
+        durations = [float(value) for value in evidence.get("duration_samples_hours", ())]
+        observed_mean = evidence.get("mean_return_percent")
+        expected_return = float(self.roi * 100 if observed_mean is None else observed_mean)
+        planned_batches = self.batch_plan.set_count if self.batch_plan else 0
+        entry_chaos = (
+            self.batch_plan.executable_cost_chaos
+            if self.batch_plan and planned_batches else self.total_input_cost
+        )
         entry_divine = entry_chaos / chaos_per_divine
+        quoted_exit_chaos = (
+            self.batch_plan.executable_revenue_chaos
+            if self.batch_plan and planned_batches else self.realistic_output_value
+        )
+        exit_chaos = entry_chaos * (1 + expected_return / 100) if returns else quoted_exit_chaos
+        expected_duration = max(
+            0.25,
+            float(duration if evidence.get("median_duration_hours") is None else evidence["median_duration_hours"]),
+        )
+        expected_profit_chaos = entry_chaos * expected_return / 100
         return InvestableOpportunity(
             id=self.transformation_id,
             strategy_type="divination_card" if self.strategy_family == "divination_card" else "transformation",
@@ -180,37 +199,146 @@ class ProfitRoute(BaseModel):
             current_price=entry_chaos,
             realistic_entry_price=entry_chaos,
             realistic_exit_price=exit_chaos,
-            expected_return=self.roi * 100,
+            expected_return=expected_return,
             expected_profit_per_unit=expected_profit_chaos / chaos_per_divine,
-            expected_roi_per_lock_hour=self.roi_per_lock_hour,
-            win_probability=max(0.0, min(1.0, self.confidence)),
-            expected_duration=duration,
-            duration_distribution=[duration],
-            downside_percentile=-self.execution_risk * 100,
-            upside_percentile=max(0.0, self.roi * 100),
-            historical_sample_size=0,
-            confidence=self.confidence,
+            expected_roi_per_lock_hour=(expected_return / 100) / expected_duration,
+            win_probability=float(evidence.get("win_probability") or 0),
+            expected_duration=expected_duration,
+            duration_distribution=durations,
+            downside_percentile=float(
+                -self.execution_risk * 100
+                if evidence.get("p10_return_percent") is None else evidence["p10_return_percent"]
+            ),
+            upside_percentile=float(
+                max(0.0, expected_return)
+                if evidence.get("p90_return_percent") is None else evidence["p90_return_percent"]
+            ),
+            historical_sample_size=int(evidence.get("sample_size") or 0),
+            historical_returns=returns,
+            confidence=float(evidence.get("historical_confidence") or 0),
             liquidity=self.liquidity,
-            execution_effort=float(len(self.execution_steps)),
+            execution_effort=self.active_execution_time,
             minimum_capital=entry_divine,
-            maximum_reasonable_capital=entry_divine * max_batch,
-            opportunity_capacity=self.capacity * entry_divine,
+            maximum_reasonable_capital=entry_divine if self.batch_plan else 0,
+            opportunity_capacity=entry_divine if self.batch_plan else 0,
             correlation_group=self.strategy_family,
             created_at=created_at,
             last_validated_at=created_at,
             expected_half_life=duration,
             expires_at=expires_at,
-            tier="WATCH" if status == StrategyLifecycle.EXPERIMENTAL.value else "B",
+            tier=str(evidence.get("tier") or "WATCH"),
             strategy_status=status,
             metadata={
                 "profit_route": self.model_dump(),
                 "allocation_cap": bankroll * 0.02 if status == StrategyLifecycle.EXPERIMENTAL.value else bankroll,
                 "source": self.source,
                 "verification_metadata": self.verification_metadata,
+                "allocator_unit": "selected_batch_plan" if self.batch_plan else None,
+                "selected_batch_count": planned_batches,
                 "capacity_units": self.capacity_units,
                 "capacity_assumptions": self.capacity_assumptions,
+                "route_evidence": evidence,
+                "certainty": self.certainty.value,
+                "active_effort_hours": self.active_execution_time,
             },
+            rejection_reason=(
+                evidence.get("rejection_reasons", [None])[0]
+                if evidence.get("rejection_reasons") else None
+            ),
         )
+
+def route_version(route: ProfitRoute) -> str:
+    return str(route.verification_metadata.get("registry_version") or route.verified_version)
+
+
+def route_allocator_evidence(
+    route: ProfitRoute,
+    records: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Summarize only completed observations for this exact route identity."""
+    version = route_version(route)
+    completed = [
+        record for record in records
+        if record.get("status") == "completed"
+        and record.get("opportunity_id") == route.transformation_id
+        and record.get("league") == route.league
+        and record.get("route_version") == version
+        and record.get("poe_patch") == route.poe_patch
+        and record.get("actual_cost_chaos") is not None
+        and record.get("actual_revenue_chaos") is not None
+        and record.get("actual_duration_hours") is not None
+    ]
+    returns = [
+        (float(record["actual_revenue_chaos"]) - float(record["actual_cost_chaos"]))
+        / float(record["actual_cost_chaos"]) * 100
+        for record in completed
+        if float(record["actual_cost_chaos"]) > 0
+    ]
+    durations = [float(record["actual_duration_hours"]) for record in completed]
+    summary = validation.summarize_returns(returns)
+    observed_mean = summary.get("mean_return")
+    expected_return = float(route.safe_edge_ratio * 100 if observed_mean is None else observed_mean)
+    tier, tier_reason = empirical_tier(
+        sample_size=int(summary["sample_size"]),
+        historical_confidence=float(summary.get("historical_confidence") or 0),
+        liquidity_tier=str(route.liquidity.get("tier", "low")).lower(),
+        expected_return=expected_return,
+        has_returns=bool(returns),
+    )
+    blockers = []
+    if tier_reason:
+        blockers.append(tier_reason)
+    if route.status != "executable":
+        blockers.append("route_not_executable")
+    if route.safe_edge_chaos <= 0:
+        blockers.append("margin_of_safety")
+    if route.recommended_capacity <= 0:
+        blockers.append("capacity_unavailable")
+    if any(leg.freshness_state == "stale" for leg in route.evidence_legs):
+        blockers.append("stale_quote")
+    return {
+        "sample_size": int(summary["sample_size"]),
+        "tier": tier,
+        "eligible": tier in {"S", "A"} and not blockers,
+        "historical_confidence": summary.get("historical_confidence"),
+        "win_probability": summary.get("win_probability"),
+        "return_samples_percent": summary["return_samples"],
+        "duration_samples_hours": durations[:500],
+        "mean_return_percent": summary.get("mean_return"),
+        "median_return_percent": summary.get("median_return"),
+        "p10_return_percent": summary.get("p10_return"),
+        "p90_return_percent": summary.get("p90_return"),
+        "median_duration_hours": (
+            statistics.median(durations) if durations else None
+        ),
+        "actual_net_profit_chaos": (
+            sum(
+                (float(record["actual_revenue_chaos"]) - float(record["actual_cost_chaos"]))
+                / int(record["batch_count"])
+                for record in completed
+            ) / len(completed) if completed else None
+        ),
+        "actual_total_net_profit_chaos": (
+            sum(float(record["actual_revenue_chaos"]) - float(record["actual_cost_chaos"]) for record in completed)
+            / len(completed) if completed else None
+        ),
+        "actual_duration_hours": (
+            sum(durations) / len(durations) if durations else None
+        ),
+        "rejection_reasons": list(dict.fromkeys(blockers)),
+    }
+
+
+def _context_route_evidence(
+    context: Mapping[str, Any],
+    route: ProfitRoute,
+) -> Mapping[str, Any]:
+    supplied = context.get("route_evidence", {}).get(route.transformation_id)
+    return supplied if supplied is not None else route_allocator_evidence(
+        route, context.get("route_execution_records", ())
+    )
+
+
 class StrategyLifecycle(StrEnum):
     EXPERIMENTAL = "Experimental"
     VALIDATED = "Validated"
@@ -564,6 +692,7 @@ class TransformationStrategyProvider:
                 max_batch=definitions[route.transformation_id]["max_batch"],
                 bankroll=bankroll,
                 chaos_per_divine=chaos_per_divine,
+                evidence=_context_route_evidence(context, route),
             )
             for route in self.evaluate(context)
             if route.expected_net_profit > 0
@@ -1650,6 +1779,7 @@ class DivinationCardStrategyProvider:
                 max_batch=max(1, route.recommended_capacity),
                 bankroll=bankroll,
                 chaos_per_divine=chaos_per_divine,
+                evidence=_context_route_evidence(context, route),
             )
             for route in self.evaluate(context)
             if route.expected_net_profit > 0 and route.market_capacity > 0 and route.recommended_capacity > 0
@@ -2129,6 +2259,25 @@ def _deferred_route(
     market_capacity = int(market_eligible[-1]["batch_size"]) if market_eligible else 0
     budget_capacity = int(budget_eligible[-1]["batch_size"]) if budget_eligible else 0
     recommended_capacity = int(recommended_eligible[-1]["batch_size"]) if recommended_eligible else 0
+    batch_plan = None
+    if budget > 0 and recommended_eligible:
+        selected = recommended_eligible[-1]
+        batch_size = int(selected["batch_size"])
+        batch_plan = BatchPlan(
+            budget_chaos=budget,
+            set_count=batch_size,
+            exact_cards_to_buy=0,
+            expected_outcomes=[],
+            executable_cost_chaos=float(selected["input_cost_chaos"]),
+            executable_revenue_chaos=float(selected["executable_output_chaos"]),
+            executable_net_chaos=float(selected["safe_net_chaos"]),
+            minimum_target_sale_chaos=float(selected["input_cost_chaos"]),
+            active_effort_hours=active_time * batch_size,
+            lock_time_min_hours=capital_lock_time,
+            lock_time_max_hours=capital_lock_time,
+            maximum_recommended_batch=batch_size,
+            binding_constraint=str(selected["binding_constraint"]),
+        )
     executable = market_ladder[0] if market_ladder else None
     route_status = "executable" if executable and market_eligible else "theoretical"
     reasons = ["verified deterministic transformation", f"definition source: {record['source']} ({record['verified_version']})"]
@@ -2218,8 +2367,9 @@ def _deferred_route(
         liquidity={"tier": validation.liquidity_tier(min((info["volume"] or 0) for info in prices)), "volume": min((info["volume"] or 0) for info in prices), "components": {
             str(component["market_key"]): info["volume"] for component, info in zip(all_costs + outputs, prices, strict=True) if info["volume"] is not None
         }}, source=source, verified_version=str(record["verified_version"]), poe_patch=record.get("poe_patch"),
-        verification_metadata={"definition_source": record["source"], "verified_version": record["verified_version"], "poe_patch": record.get("poe_patch"), "price_sources": source_values, "market_keys": [str(item["market_key"]) for item in all_costs + outputs], "linking_method": record.get("linking_method"), "batch_ladder": recommended_ladder},
+        verification_metadata={"definition_source": record["source"], "verified_version": record["verified_version"], "poe_patch": record.get("poe_patch"), "strategy_lifecycle": record["status"], "price_sources": source_values, "market_keys": [str(item["market_key"]) for item in all_costs + outputs], "linking_method": record.get("linking_method"), "batch_ladder": recommended_ladder},
         inputs=[dict(item) for item in inputs], costs=[dict(item) for item in conversion_costs], outputs=[dict(item) for item in outputs], execution_steps=manual,
+        batch_plan=batch_plan,
     )
 
 
@@ -2257,9 +2407,13 @@ class AssemblyStrategyProvider:
         return routes
 
     def discover(self, context: Mapping[str, Any]) -> Sequence[InvestableOpportunity]:
-        return [route.to_investable(status="Validated", max_batch=max(1, int(route.capacity)),
-                                    bankroll=float(context.get("bankroll", 0) or 0),
-                                    chaos_per_divine=float(context.get("chaos_per_divine", 1) or 1))
+        return [route.to_investable(
+                    status=str(route.verification_metadata.get("strategy_lifecycle", "Validated")),
+                    max_batch=max(1, int(route.capacity)),
+                    bankroll=float(context.get("bankroll", 0) or 0),
+                    chaos_per_divine=float(context.get("chaos_per_divine", 1) or 1),
+                    evidence=_context_route_evidence(context, route),
+                )
                 for route in self.evaluate(context)
                 if route.expected_net_profit > 0 and route.status != "manual_only"]
 
@@ -2283,9 +2437,13 @@ class VendorTransformationStrategyProvider:
         return routes
 
     def discover(self, context: Mapping[str, Any]) -> Sequence[InvestableOpportunity]:
-        return [route.to_investable(status="Validated", max_batch=max(1, int(route.capacity)),
-                                    bankroll=float(context.get("bankroll", 0) or 0),
-                                    chaos_per_divine=float(context.get("chaos_per_divine", 1) or 1))
+        return [route.to_investable(
+                    status=str(route.verification_metadata.get("strategy_lifecycle", "Validated")),
+                    max_batch=max(1, int(route.capacity)),
+                    bankroll=float(context.get("bankroll", 0) or 0),
+                    chaos_per_divine=float(context.get("chaos_per_divine", 1) or 1),
+                    evidence=_context_route_evidence(context, route),
+                )
                 for route in self.evaluate(context)
                 if route.expected_net_profit > 0 and route.status != "manual_only"]
 
@@ -2385,9 +2543,13 @@ class ArbitrageGraphStrategyProvider:
         return routes
 
     def discover(self, context: Mapping[str, Any]) -> Sequence[InvestableOpportunity]:
-        return [route.to_investable(status="Validated", max_batch=max(1, int(route.capacity)),
-                                    bankroll=float(context.get("bankroll", 0) or 0),
-                                    chaos_per_divine=float(context.get("chaos_per_divine", 1) or 1))
+        return [route.to_investable(
+                    status=str(route.verification_metadata.get("strategy_lifecycle", "Validated")),
+                    max_batch=max(1, int(route.capacity)),
+                    bankroll=float(context.get("bankroll", 0) or 0),
+                    chaos_per_divine=float(context.get("chaos_per_divine", 1) or 1),
+                    evidence=_context_route_evidence(context, route),
+                )
                 for route in self.evaluate(context)
                 if route.expected_net_profit > 0 and route.status != "manual_only"]
 

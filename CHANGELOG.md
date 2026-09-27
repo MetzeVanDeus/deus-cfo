@@ -1,6 +1,21 @@
 # Changelog
 ## Unreleased
 
+## 0.8.0 — 2026-09-27
+
+### Added
+
+- Added persisted pending route captures and compact manual paper/actual completion, correction, and invalidation through the existing execution journal.
+- Added exact route, league, registry-version, patch, quote, planner, quantity-unit, batch, and total-cost/revenue provenance for completed route observations.
+- Added route allocator evidence and explicit eligibility blockers to the Profit Routes API and UI.
+
+### Changed
+
+- Applied one shared empirical tier policy to statistical and transformation opportunities; deterministic mechanics and current quotes cannot substitute for completed return and duration samples.
+- Capped route allocation by the selected cumulative-depth batch cost with exact Chaos-to-Divine unit reconciliation.
+- Kept historical pending captures completable after current quotes or route availability change while current stale evidence independently remains non-actionable.
+
+
 ## 0.7.0 — 2026-09-06
 
 ### Added

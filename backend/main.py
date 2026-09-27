@@ -4,6 +4,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 import httpx
+import hashlib
 import math
 import json
 import logging
@@ -12,6 +13,7 @@ import secrets
 import hmac
 import tempfile
 import sys
+from typing import Literal
 from pathlib import Path
 from urllib.parse import urlsplit
 import database
@@ -650,6 +652,7 @@ async def create_capital_plan(request: CapitalPlanRequest):
                 "active_poe_patch": active_poe_patch,
                 "budget_chaos": request.bankroll.available_currency * chaos_per_divine,
                 "capacity_horizon_hours": float(request.hours),
+                "route_execution_records": await portfolio.route_execution_records(league=request.league),
             }
             candidates.extend(provider.discover(provider_context))
             candidates.extend(strategies.default_deferred_strategy_provider().discover(provider_context))
@@ -1008,6 +1011,98 @@ async def resolve_active_poe_patch(league: str) -> str | None:
     registry = strategies.default_div_card_registry()
     return registry.poe_patch if league in registry.verified_leagues else None
 
+def _route_planner_capture(
+    *,
+    league: str,
+    category: str | None,
+    budget_chaos: float | None,
+    horizon_hours: float | None,
+    minimum_safe_profit_chaos: float | None,
+    execution_bias_percent: float | None,
+) -> dict:
+    return {
+        "league": league,
+        "category": category,
+        "budget_chaos": float(budget_chaos) if budget_chaos is not None else None,
+        "horizon_hours": float(horizon_hours) if horizon_hours is not None else None,
+        "minimum_safe_profit_chaos": (
+            float(minimum_safe_profit_chaos) if minimum_safe_profit_chaos is not None else None
+        ),
+        "execution_bias_percent": (
+            float(execution_bias_percent) if execution_bias_percent is not None else None
+        ),
+    }
+
+
+def _route_capture(route: strategies.ProfitRoute, planner: dict) -> dict:
+    return {"route": route.model_dump(mode="json"), "planner": planner}
+
+
+def _route_snapshot_id(capture: dict) -> str:
+    encoded = json.dumps(
+        capture, sort_keys=True, separators=(",", ":"), allow_nan=False
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _route_from_payload(payload: dict) -> strategies.ProfitRoute:
+    fields = strategies.ProfitRoute.model_fields
+    return strategies.ProfitRoute.model_validate({
+        key: value for key, value in payload.items() if key in fields
+    })
+
+
+def _route_execution_evidence(execution: dict, records: list[dict]) -> dict:
+    snapshot = execution.get("route_snapshot") or {}
+    route_payload = snapshot.get("route")
+    if not isinstance(route_payload, dict):
+        raise ValueError("route execution snapshot is unavailable")
+    return strategies.route_allocator_evidence(
+        strategies.ProfitRoute.model_validate(route_payload), records
+    )
+
+
+class RoutePlanningRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    league: str = Field(min_length=1)
+    transformation_id: str = Field(min_length=1)
+    category: str | None = None
+    budget_chaos: float | None = None
+    horizon_hours: float | None = None
+    minimum_safe_profit_chaos: float | None = None
+    execution_bias_percent: float | None = None
+
+
+class RouteExecutionCaptureRequest(RoutePlanningRequest):
+    snapshot_id: str = Field(min_length=64, max_length=64)
+    execution_kind: Literal["paper", "actual"]
+    batch_count: int = Field(gt=0, strict=True)
+
+
+class RouteExecutionResultRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    actual_cost_chaos: float = Field(strict=True)
+    actual_revenue_chaos: float = Field(strict=True)
+    actual_duration_hours: float = Field(strict=True)
+    completed_at: str | None = None
+
+
+class RouteExecutionCorrectionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    actual_cost_chaos: float = Field(strict=True)
+    actual_revenue_chaos: float = Field(strict=True)
+    actual_duration_hours: float = Field(strict=True)
+
+
+class RouteExecutionInvalidationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str = Field(min_length=1)
+
+
 
 @app.get("/api/profit-routes")
 async def get_profit_routes(
@@ -1115,6 +1210,37 @@ async def get_profit_routes(
             }
             for route in card_routes
         ]
+    records = await portfolio.route_execution_records(league=league)
+    planner_capture = _route_planner_capture(
+        league=league,
+        category=category,
+        budget_chaos=budget_chaos,
+        horizon_hours=horizon_hours,
+        minimum_safe_profit_chaos=minimum_safe_profit_chaos,
+        execution_bias_percent=execution_bias_percent,
+    )
+    route_payloads = []
+    for route in sorted(
+        routes,
+        key=lambda item: (
+            item.status != "executable",
+            -(item.expected_net_profit if item.expected_net_profit > 0 else 0),
+            item.name,
+        ),
+    ):
+        evidence = strategies.route_allocator_evidence(route, records)
+        version = strategies.route_version(route)
+        payload = route.model_dump(mode="json")
+        payload["actual_net_profit"] = evidence["actual_net_profit_chaos"]
+        payload["allocator_evidence"] = evidence
+        payload["snapshot_id"] = _route_snapshot_id(_route_capture(route, planner_capture))
+        payload["recent_executions"] = [
+            record for record in records
+            if record["opportunity_id"] == route.transformation_id
+            and record["route_version"] == version
+            and record["poe_patch"] == route.poe_patch
+        ][-5:]
+        route_payloads.append(payload)
     response = {
         "league": league,
         "category": category,
@@ -1122,18 +1248,129 @@ async def get_profit_routes(
         "patch_status": patch_status,
         "patch_reasons": patch_reasons,
         "deterministic_readiness": deterministic_readiness,
-        "routes": [route.model_dump() for route in sorted(
-            routes,
-            key=lambda route: (
-                route.status != "executable",
-                -(route.expected_net_profit if route.expected_net_profit > 0 else 0),
-                route.name,
-            ),
-        )],
+        "routes": route_payloads,
     }
     if registry_health is not None:
         response["registry_health"] = registry_health
     return response
+
+
+@app.get("/api/profit-routes/executions")
+async def get_route_executions(league: str | None = None):
+    return await portfolio.route_execution_records(league=league)
+
+
+@app.post("/api/profit-routes/executions/capture", dependencies=[Depends(require_local_session)])
+async def capture_route_execution(request: RouteExecutionCaptureRequest):
+    response = await get_profit_routes(
+        league=request.league,
+        category=request.category,
+        budget_chaos=request.budget_chaos,
+        horizon_hours=request.horizon_hours,
+        minimum_safe_profit_chaos=request.minimum_safe_profit_chaos,
+        execution_bias_percent=request.execution_bias_percent,
+    )
+    payload = next(
+        (
+            item for item in response["routes"]
+            if item["transformation_id"] == request.transformation_id
+        ),
+        None,
+    )
+    if payload is None:
+        raise HTTPException(status_code=409, detail="route is no longer available; refresh before capture")
+    if payload["snapshot_id"] != request.snapshot_id:
+        raise HTTPException(status_code=409, detail="route quotes changed; refresh and review before capture")
+    route = _route_from_payload(payload)
+    plan = route.batch_plan
+    if route.status != "executable" or plan is None:
+        raise HTTPException(status_code=409, detail="route no longer has an executable batch plan")
+    if (
+        request.batch_count != plan.set_count
+        or request.batch_count > plan.maximum_recommended_batch
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="batch_count must equal the captured executable batch plan",
+        )
+    planner_capture = _route_planner_capture(
+        league=request.league,
+        category=request.category,
+        budget_chaos=request.budget_chaos,
+        horizon_hours=request.horizon_hours,
+        minimum_safe_profit_chaos=request.minimum_safe_profit_chaos,
+        execution_bias_percent=request.execution_bias_percent,
+    )
+    try:
+        execution = await portfolio.capture_route_execution(
+            opportunity_id=route.transformation_id,
+            league=request.league,
+            route_version=strategies.route_version(route),
+            poe_patch=route.poe_patch,
+            quantity_unit=route.capacity_units,
+            route_snapshot=_route_capture(route, planner_capture),
+            route_snapshot_id=request.snapshot_id,
+            execution_kind=request.execution_kind,
+            batch_count=request.batch_count,
+            predicted_cost_chaos=plan.executable_cost_chaos,
+            predicted_revenue_chaos=plan.executable_revenue_chaos,
+            predicted_duration_hours=plan.lock_time_max_hours,
+        )
+        records = await portfolio.route_execution_records(league=request.league)
+        return {
+            "execution": execution,
+            "allocator_evidence": strategies.route_allocator_evidence(route, records),
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/profit-routes/executions/{execution_id}/complete", dependencies=[Depends(require_local_session)])
+async def complete_route_execution(execution_id: int, request: RouteExecutionResultRequest):
+    try:
+        execution = await portfolio.complete_route_execution(
+            _require_id(execution_id, "execution_id"), **request.model_dump()
+        )
+        records = await portfolio.route_execution_records(league=execution["league"])
+        return {
+            "execution": execution,
+            "allocator_evidence": _route_execution_evidence(execution, records),
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.patch("/api/profit-routes/executions/{execution_id}", dependencies=[Depends(require_local_session)])
+async def correct_route_execution(execution_id: int, request: RouteExecutionCorrectionRequest):
+    try:
+        execution = await portfolio.correct_route_execution(
+            _require_id(execution_id, "execution_id"), **request.model_dump()
+        )
+        records = await portfolio.route_execution_records(league=execution["league"])
+        return {
+            "execution": execution,
+            "allocator_evidence": _route_execution_evidence(execution, records),
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/profit-routes/executions/{execution_id}/invalidate", dependencies=[Depends(require_local_session)])
+async def invalidate_route_execution(
+    execution_id: int,
+    request: RouteExecutionInvalidationRequest,
+):
+    try:
+        execution = await portfolio.invalidate_route_execution(
+            _require_id(execution_id, "execution_id"), request.reason
+        )
+        records = await portfolio.route_execution_records(league=execution["league"])
+        return {
+            "execution": execution,
+            "allocator_evidence": _route_execution_evidence(execution, records),
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 class TransformationEvaluateRequest(BaseModel):

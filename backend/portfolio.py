@@ -575,6 +575,244 @@ async def manual_trade_records(opportunity_id: str | None = None) -> list[dict[s
     finally:
         await db.close()
 
+def _route_execution(row: Mapping[str, Any]) -> dict[str, Any]:
+    item = dict(row)
+    raw_snapshot = item.pop("route_snapshot_json", None)
+    item["route_snapshot"] = json.loads(raw_snapshot) if raw_snapshot else None
+    if item.get("invalidated_at"):
+        item["status"] = "invalidated"
+    elif item.get("realized_profit") is None:
+        item["status"] = "pending"
+    else:
+        item["status"] = "completed"
+    item["batch_count"] = int(item.get("quantity") or 0)
+    count = item["batch_count"]
+    item["actual_cost_chaos"] = (
+        float(item["actual_entry_price"]) * count
+        if item.get("actual_entry_price") is not None else None
+    )
+    item["actual_revenue_chaos"] = (
+        float(item["actual_exit_price"]) * count
+        if item.get("actual_exit_price") is not None else None
+    )
+    item["predicted_cost_chaos"] = (
+        float(item["predicted_entry_price"]) * count
+        if item.get("predicted_entry_price") is not None else None
+    )
+    item["predicted_revenue_chaos"] = (
+        float(item["predicted_exit_price"]) * count
+        if item.get("predicted_exit_price") is not None else None
+    )
+    item["captured_at"] = item.get("actual_entry_at")
+    item["completed_at"] = (
+        item.get("recorded_at") if item.get("realized_profit") is not None else None
+    )
+    return item
+
+
+def _finite(name: str, value: float, *, allow_zero: bool = False) -> float:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or value < 0
+        or (not allow_zero and value == 0)
+    ):
+        qualifier = "non-negative" if allow_zero else "positive"
+        raise ValueError(f"{name} must be finite and {qualifier}")
+    return float(value)
+
+
+async def capture_route_execution(
+    *,
+    opportunity_id: str,
+    league: str,
+    route_version: str,
+    poe_patch: str | None,
+    quantity_unit: str,
+    route_snapshot: Mapping[str, Any],
+    route_snapshot_id: str,
+    execution_kind: str,
+    batch_count: int,
+    predicted_cost_chaos: float,
+    predicted_revenue_chaos: float,
+    predicted_duration_hours: float,
+) -> dict[str, Any]:
+    """Persist an accepted backend route quote before any outcome is known."""
+    if not all(isinstance(value, str) and value.strip() for value in (
+        opportunity_id, league, route_version, quantity_unit, route_snapshot_id,
+    )):
+        raise ValueError("route identity, league, version, quantity unit, and snapshot are required")
+    if execution_kind not in {"paper", "actual"}:
+        raise ValueError("execution_kind must be paper or actual")
+    if isinstance(batch_count, bool) or not isinstance(batch_count, int) or batch_count <= 0:
+        raise ValueError("batch_count must be a positive integer")
+    cost = _finite("predicted_cost_chaos", predicted_cost_chaos)
+    revenue = _finite("predicted_revenue_chaos", predicted_revenue_chaos, allow_zero=True)
+    duration = _finite("predicted_duration_hours", predicted_duration_hours, allow_zero=True)
+    captured_at = database.now_iso()
+    db = await database.get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO trade_records
+               (portfolio_id, position_id, opportunity_id, predicted_entry_price,
+                predicted_exit_price, predicted_duration_hours, predicted_profit,
+                recorded_at, quantity, capital_currency, actual_entry_at, league,
+                route_version, poe_patch, quantity_unit, route_snapshot_json,
+                route_snapshot_id, execution_kind)
+               VALUES (NULL, NULL, ?, ?, ?, ?, ?, ?, ?, 'Chaos', ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                opportunity_id, cost / batch_count, revenue / batch_count, duration,
+                revenue - cost, captured_at, batch_count, captured_at, league,
+                route_version, poe_patch, quantity_unit,
+                json.dumps(dict(route_snapshot), sort_keys=True, separators=(",", ":")),
+                route_snapshot_id, execution_kind,
+            ),
+        )
+        await db.commit()
+        row = await (await db.execute(
+            "SELECT * FROM trade_records WHERE id = ?", (cursor.lastrowid,)
+        )).fetchone()
+        return _route_execution(row)
+    finally:
+        await db.close()
+
+
+async def route_execution_records(
+    opportunity_id: str | None = None,
+    *,
+    league: str | None = None,
+) -> list[dict[str, Any]]:
+    query = "SELECT * FROM trade_records WHERE route_snapshot_id IS NOT NULL"
+    params: list[Any] = []
+    if opportunity_id is not None:
+        query += " AND opportunity_id = ?"
+        params.append(opportunity_id)
+    if league is not None:
+        query += " AND league = ?"
+        params.append(league)
+    query += " ORDER BY id"
+    db = await database.get_db()
+    try:
+        rows = await (await db.execute(query, tuple(params))).fetchall()
+        return [_route_execution(row) for row in rows]
+    finally:
+        await db.close()
+
+
+async def complete_route_execution(
+    execution_id: int,
+    *,
+    actual_cost_chaos: float,
+    actual_revenue_chaos: float,
+    actual_duration_hours: float,
+    completed_at: str | None = None,
+) -> dict[str, Any]:
+    cost = _finite("actual_cost_chaos", actual_cost_chaos)
+    revenue = _finite("actual_revenue_chaos", actual_revenue_chaos, allow_zero=True)
+    duration = _finite("actual_duration_hours", actual_duration_hours, allow_zero=True)
+    timestamp = completed_at or database.now_iso()
+    completed_time = _parse_time(timestamp)
+    db = await database.get_db()
+    try:
+        await db.execute("BEGIN IMMEDIATE")
+        row = await (await db.execute(
+            "SELECT * FROM trade_records WHERE id = ? AND route_snapshot_id IS NOT NULL",
+            (execution_id,),
+        )).fetchone()
+        if row is None:
+            raise ValueError("route execution not found")
+        if row["invalidated_at"]:
+            raise ValueError("invalidated route execution cannot be completed")
+        if row["realized_profit"] is not None:
+            raise ValueError("route execution is already completed")
+        captured_time = _parse_time(row["actual_entry_at"])
+        if completed_time < captured_time:
+            raise ValueError("completed_at cannot be before the route capture")
+        if completed_time > datetime.now(timezone.utc):
+            raise ValueError("completed_at cannot be in the future")
+        count = int(row["quantity"])
+        profit = revenue - cost
+        await db.execute(
+            """UPDATE trade_records
+               SET actual_entry_price = ?, actual_exit_price = ?, actual_duration_hours = ?,
+                   realized_profit = ?, profitable = ?, recorded_at = ?
+               WHERE id = ?""",
+            (cost / count, revenue / count, duration, profit, int(profit > 0), timestamp, execution_id),
+        )
+        await db.commit()
+        completed = await (await db.execute(
+            "SELECT * FROM trade_records WHERE id = ?", (execution_id,)
+        )).fetchone()
+        return _route_execution(completed)
+    finally:
+        await db.close()
+
+
+async def correct_route_execution(
+    execution_id: int,
+    *,
+    actual_cost_chaos: float,
+    actual_revenue_chaos: float,
+    actual_duration_hours: float,
+) -> dict[str, Any]:
+    cost = _finite("actual_cost_chaos", actual_cost_chaos)
+    revenue = _finite("actual_revenue_chaos", actual_revenue_chaos, allow_zero=True)
+    duration = _finite("actual_duration_hours", actual_duration_hours, allow_zero=True)
+    db = await database.get_db()
+    try:
+        await db.execute("BEGIN IMMEDIATE")
+        row = await (await db.execute(
+            "SELECT * FROM trade_records WHERE id = ? AND route_snapshot_id IS NOT NULL",
+            (execution_id,),
+        )).fetchone()
+        if row is None or row["realized_profit"] is None:
+            raise ValueError("completed route execution not found")
+        if row["invalidated_at"]:
+            raise ValueError("invalidated route execution cannot be corrected")
+        count = int(row["quantity"])
+        profit = revenue - cost
+        await db.execute(
+            """UPDATE trade_records
+               SET actual_entry_price = ?, actual_exit_price = ?, actual_duration_hours = ?,
+                   realized_profit = ?, profitable = ?
+               WHERE id = ?""",
+            (cost / count, revenue / count, duration, profit, int(profit > 0), execution_id),
+        )
+        await db.commit()
+        corrected = await (await db.execute(
+            "SELECT * FROM trade_records WHERE id = ?", (execution_id,)
+        )).fetchone()
+        return _route_execution(corrected)
+    finally:
+        await db.close()
+
+
+async def invalidate_route_execution(execution_id: int, reason: str) -> dict[str, Any]:
+    if not isinstance(reason, str) or not reason.strip():
+        raise ValueError("invalidation reason is required")
+    db = await database.get_db()
+    try:
+        await db.execute("BEGIN IMMEDIATE")
+        row = await (await db.execute(
+            "SELECT * FROM trade_records WHERE id = ? AND route_snapshot_id IS NOT NULL",
+            (execution_id,),
+        )).fetchone()
+        if row is None:
+            raise ValueError("route execution not found")
+        if not row["invalidated_at"]:
+            await db.execute(
+                "UPDATE trade_records SET invalidated_at = ?, invalidation_reason = ? WHERE id = ?",
+                (database.now_iso(), reason.strip(), execution_id),
+            )
+            await db.commit()
+            row = await (await db.execute(
+                "SELECT * FROM trade_records WHERE id = ?", (execution_id,)
+            )).fetchone()
+        return _route_execution(row)
+    finally:
+        await db.close()
+
 
 async def calibrate_opportunity(
     opportunity_id: str,

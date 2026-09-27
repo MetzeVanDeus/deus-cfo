@@ -4,7 +4,11 @@ from datetime import datetime, timezone
 import pytest
 
 import main
-from strategies import TransformationRegistry, TransformationStrategyProvider
+import capital
+import database
+import portfolio
+import strategies
+from strategies import BatchPlan, ProfitRoute, TransformationRegistry, TransformationStrategyProvider
 
 
 def _record(item, price, *, source="test-market", grade="A"):
@@ -208,3 +212,237 @@ def test_loss_making_routes_remain_read_only_but_are_not_public_or_allocatable(m
 def test_placeholder_fixture_is_rejected():
     record = next(iter(main.strategies.default_transformation_registry().records()))
     assert record["status"] == "Rejected"
+
+def _phase4_route() -> ProfitRoute:
+    return ProfitRoute(
+        transformation_id="route-a",
+        name="Route A",
+        strategy_family="deterministic_test",
+        status="executable",
+        league="Test",
+        total_input_cost=10,
+        realistic_output_value=12,
+        gross_profit=2,
+        expected_net_profit=2,
+        executable_net_profit=2,
+        roi=.2,
+        executable_roi=.2,
+        capital_required=10,
+        capacity=2,
+        capacity_units="batches",
+        active_execution_time=1,
+        capital_lock_time=2,
+        elapsed_cycle_time=2,
+        profit_per_active_hour=2,
+        roi_per_lock_hour=.1,
+        budget_capacity=2,
+        recommended_capacity=2,
+        market_capacity=2,
+        safe_edge_chaos=2,
+        safe_edge_ratio=.2,
+        liquidity={"tier": "medium", "volume": 100},
+        verified_version="v1",
+        certainty=strategies.RouteCertainty.DETERMINISTIC,
+        poe_patch="3.29",
+        inputs=[{"item": "A"}],
+        outputs=[{"item": "B"}],
+        batch_plan=BatchPlan(
+            budget_chaos=25,
+            set_count=2,
+            exact_cards_to_buy=0,
+            expected_outcomes=[],
+            executable_cost_chaos=22,
+            executable_revenue_chaos=28,
+            executable_net_chaos=6,
+            minimum_target_sale_chaos=22,
+            active_effort_hours=1,
+            lock_time_min_hours=1,
+            lock_time_max_hours=2,
+            maximum_recommended_batch=2,
+            binding_constraint="market_depth",
+        ),
+    )
+
+
+def _completed_route_record(*, profit=2, version="v1", league="Test", invalid=False):
+    return {
+        "status": "invalidated" if invalid else "completed",
+        "opportunity_id": "route-a",
+        "league": league,
+        "route_version": version,
+        "poe_patch": "3.29",
+        "actual_cost_chaos": 10,
+        "actual_revenue_chaos": 10 + profit,
+        "actual_duration_hours": 3,
+        "batch_count": 1,
+    }
+
+
+def test_route_evidence_uses_exact_completed_identity_and_preserves_observed_zero():
+    route = _phase4_route()
+    evidence = strategies.route_allocator_evidence(route, [
+        _completed_route_record(profit=0),
+        _completed_route_record(version="other"),
+        _completed_route_record(league="Other"),
+        _completed_route_record(invalid=True),
+    ])
+    assert evidence["sample_size"] == 1
+    assert evidence["mean_return_percent"] == 0
+    assert evidence["tier"] == "REJECTED"
+    candidate = route.to_investable(chaos_per_divine=100, evidence=evidence)
+    assert candidate.expected_return == 0
+    assert candidate.downside_percentile == 0
+    short = _completed_route_record()
+    short["actual_duration_hours"] = 1
+    long = _completed_route_record()
+    long["actual_duration_hours"] = 23
+    assert strategies.route_allocator_evidence(
+        route, [short, long]
+    )["median_duration_hours"] == 12
+    assert candidate.upside_percentile == 0
+
+
+def test_route_shared_gate_and_exact_cumulative_capital_units():
+    route = _phase4_route()
+    fresh = strategies.route_allocator_evidence(route, [])
+    assert fresh["tier"] == "WATCH"
+    fresh_candidate = route.to_investable(
+        status="Validated", chaos_per_divine=100, evidence=fresh
+    )
+    fresh_plan = capital.build_capital_plan(
+        capital.Bankroll(total_net_worth=10, liquid_currency=10),
+        capital.InvestmentPreferences(),
+        [fresh_candidate],
+        mode="PAPER",
+        chaos_per_divine=100,
+        simulations=5,
+    )
+    assert fresh_candidate.metadata["certainty"] == "DETERMINISTIC"
+    assert fresh_plan.positions == []
+    assert fresh["rejection_reasons"] == ["missing_empirical_distribution"]
+    observed = strategies.route_allocator_evidence(
+        route, [_completed_route_record() for _ in range(20)]
+    )
+    assert observed["tier"] == "A"
+    assert observed["eligible"] is True
+    candidate = route.to_investable(
+        status="Validated", chaos_per_divine=100, evidence=observed
+    )
+    assert candidate.minimum_capital == pytest.approx(.22)
+    assert candidate.opportunity_capacity == pytest.approx(.22)
+    assert candidate.maximum_reasonable_capital == pytest.approx(.22)
+    assert candidate.expected_roi_per_lock_hour == pytest.approx(.2 / 3)
+    assert candidate.rejection_reason is None
+    plan = capital.build_capital_plan(
+        capital.Bankroll(total_net_worth=10, liquid_currency=10),
+        capital.InvestmentPreferences(),
+        [candidate],
+        mode="PAPER",
+        chaos_per_divine=100,
+        simulations=5,
+    )
+    assert plan.positions[0].estimated_quantity == 1
+    assert plan.positions[0].capital == pytest.approx(.22)
+    assert plan.positions[0].capital <= candidate.opportunity_capacity
+
+
+def test_route_capture_completion_correction_and_invalidation_preserve_totals(monkeypatch, tmp_path):
+    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "route-journal.db"))
+    database._schema_path = None
+    route = _phase4_route()
+    snapshot = {"route": route.model_dump(mode="json"), "planner": {"league": "Test"}}
+
+    async def run():
+        captured = await portfolio.capture_route_execution(
+            opportunity_id=route.transformation_id,
+            league="Test",
+            route_version="v1",
+            poe_patch="3.29",
+            quantity_unit="batches",
+            route_snapshot=snapshot,
+            route_snapshot_id="a" * 64,
+            execution_kind="paper",
+            batch_count=2,
+            predicted_cost_chaos=22,
+            predicted_revenue_chaos=28,
+            predicted_duration_hours=2,
+        )
+        assert captured["status"] == "pending"
+        assert captured["predicted_cost_chaos"] == 22
+        assert strategies.route_allocator_evidence(route, [captured])["sample_size"] == 0
+        with pytest.raises(ValueError, match="positive"):
+            await portfolio.complete_route_execution(
+                captured["id"],
+                actual_cost_chaos=float("nan"),
+                actual_revenue_chaos=0,
+                actual_duration_hours=4,
+            )
+        with pytest.raises(ValueError, match="before"):
+            await portfolio.complete_route_execution(
+                captured["id"],
+                actual_cost_chaos=24,
+                actual_revenue_chaos=0,
+                actual_duration_hours=4,
+                completed_at="2000-01-01T00:00:00+00:00",
+            )
+        with pytest.raises(ValueError, match="future"):
+            await portfolio.complete_route_execution(
+                captured["id"],
+                actual_cost_chaos=24,
+                actual_revenue_chaos=0,
+                actual_duration_hours=4,
+                completed_at="2999-01-01T00:00:00+00:00",
+            )
+        completed = await portfolio.complete_route_execution(
+            captured["id"],
+            actual_cost_chaos=24,
+            actual_revenue_chaos=0,
+            actual_duration_hours=4,
+        )
+        assert completed["status"] == "completed"
+        assert completed["realized_profit"] == -24
+        assert completed["actual_revenue_chaos"] == 0
+        corrected = await portfolio.correct_route_execution(
+            captured["id"],
+            actual_cost_chaos=20,
+            actual_revenue_chaos=30,
+            actual_duration_hours=3,
+        )
+        assert corrected["realized_profit"] == 10
+        invalidated = await portfolio.invalidate_route_execution(captured["id"], "entry was test data")
+        assert invalidated["status"] == "invalidated"
+        assert strategies.route_allocator_evidence(route, [invalidated])["sample_size"] == 0
+        assert invalidated["completed_at"] is not None
+        pending = await portfolio.capture_route_execution(
+            opportunity_id=route.transformation_id,
+            league="Test",
+            route_version="v1",
+            poe_patch="3.29",
+            quantity_unit="batches",
+            route_snapshot=snapshot,
+            route_snapshot_id="b" * 64,
+            execution_kind="paper",
+            batch_count=2,
+            predicted_cost_chaos=22,
+            predicted_revenue_chaos=28,
+            predicted_duration_hours=2,
+        )
+        invalid_pending = await portfolio.invalidate_route_execution(pending["id"], "cancelled")
+        assert invalid_pending["completed_at"] is None
+
+    asyncio.run(run())
+
+
+def test_route_snapshot_hash_excludes_journal_state():
+    route = _phase4_route()
+    planner = main._route_planner_capture(
+        league="Test",
+        category=None,
+        budget_chaos=25,
+        horizon_hours=24,
+        minimum_safe_profit_chaos=1,
+        execution_bias_percent=2,
+    )
+    before = main._route_snapshot_id(main._route_capture(route, planner))
+    assert main._route_snapshot_id(main._route_capture(route, planner)) == before
+    assert "allocator_evidence" not in main._route_capture(route, planner)["route"]

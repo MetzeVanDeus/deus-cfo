@@ -174,7 +174,16 @@ CREATE TABLE IF NOT EXISTS trade_records (
     quantity REAL,
     chaos_per_divine REAL,
     capital_currency TEXT,
-    actual_entry_at TEXT
+    actual_entry_at TEXT,
+    league TEXT,
+    route_version TEXT,
+    poe_patch TEXT,
+    quantity_unit TEXT,
+    route_snapshot_json TEXT,
+    route_snapshot_id TEXT,
+    execution_kind TEXT,
+    invalidated_at TEXT,
+    invalidation_reason TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_trade_records_confidence
     ON trade_records (confidence);
@@ -531,8 +540,12 @@ async def get_db() -> aiosqlite.Connection:
                         "capital_currency": "TEXT", "chaos_per_divine": "REAL",
                     })
                     await _ensure_columns(db, "trade_records", {
-                        "quantity": "REAL", "chaos_per_divine": "REAL", "capital_currency": "TEXT",
-                        "actual_entry_at": "TEXT",
+                        "recorded_at": "TEXT", "quantity": "REAL", "chaos_per_divine": "REAL",
+                        "capital_currency": "TEXT", "actual_entry_at": "TEXT", "league": "TEXT",
+                        "route_version": "TEXT",
+                        "poe_patch": "TEXT", "quantity_unit": "TEXT", "route_snapshot_json": "TEXT",
+                        "route_snapshot_id": "TEXT", "execution_kind": "TEXT",
+                        "invalidated_at": "TEXT", "invalidation_reason": "TEXT",
                     })
                     await db.execute(
                         """UPDATE snapshots

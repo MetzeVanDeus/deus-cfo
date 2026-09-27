@@ -1149,6 +1149,33 @@ a.btn-primary,a.btn-secondary {
   font-size:var(--fs-micro);
   letter-spacing:.08em;
 }
+.route-evidence {
+  margin-top:var(--sp-4);
+  padding:var(--sp-3);
+  border-color:color-mix(in srgb,var(--brass) 28%,var(--outline));
+}
+.route-evidence .panel-title h3 {
+  margin:0;
+}
+.execution-journal {
+  margin-top:var(--sp-3);
+  padding-top:var(--sp-3);
+  border-top:1px solid var(--line);
+}
+.execution-history {
+  margin-top:var(--sp-3);
+}
+.execution-history h4 {
+  margin:0 0 var(--sp-2);
+}
+.execution-correction {
+  display:flex;
+  gap:var(--sp-1);
+  margin-top:var(--sp-1);
+}
+.execution-correction input {
+  width:7rem;
+}
 @media (max-width:560px) {
   .route-columns,.route-bottom {
     grid-template-columns:1fr;
