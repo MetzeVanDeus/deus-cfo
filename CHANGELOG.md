@@ -1,6 +1,25 @@
 # Changelog
 ## Unreleased
 
+## 0.9.0 — 2026-09-27
+
+### Added
+
+- Added transparent route execution calibration for entry fills, exit liquidation, and elapsed lock time from completed journal observations, with exact-route and independent peer-family provenance.
+- Added backend-normalized Chaos/Divine budgets, fresh rate provenance, route filters, backend sections, confidence-adjusted ranking, and real Divine-profit-per-active-hour sorting.
+- Added a compact, keyboard-accessible Profit Routes comparison view with expandable quantities, depth, evidence, buffers, readiness, and manual journal details.
+
+### Changed
+
+- Applied robust median calibration before safe-edge, budget, horizon, capacity, ROI, and batch-plan selection while retaining the uncalibrated baseline for the same selected batch.
+- Required two exact-route observations or five independent peer-route observations; exact evidence wins equal-strength ties, while sparse evidence leaves estimates unchanged.
+- Kept elapsed-duration learning separate from planned active effort and preserved manual-only captures, corrections, invalidations, stale-quote blocking, patch checks, and allocator empirical gates.
+
+### Release
+
+- Bumped the application and frontend version to `0.9.0` for Phase 5 execution-friction learning and the completed Phase 6 Profit Routes workflow.
+
+
 ## 0.8.0 — 2026-09-27
 
 ### Added

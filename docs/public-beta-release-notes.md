@@ -8,7 +8,9 @@ DeusCFO is a local Path of Exile market research terminal for historical prices,
 - Allow the collector to build current snapshots. Currency Exchange backfill is optional and visible in Data readiness.
 - Expect `WAIT` when history, liquidity, patch evidence, or production strategy coverage is insufficient.
 
-Profit Routes now supports a manual minimum safe profit per evaluated batch and a conservative execution-bias percentage. Route details separate certainty, pricing, liquidity, and historical confidence, and trace each market leg to its source, timestamps, freshness policy, and blocker. Stale quotes remain visible as evidence but cannot create executable capacity.
+Profit Routes now accepts Chaos or Divine budgets, exposes fresh conversion-rate provenance, and groups backend-ranked results into actionable, deterministic, card, conversion, bounded-EV, and watch/readiness sections. Filters cover minimum safe profit and ROI, planned active effort, elapsed lock time, family, lifecycle, and deterministic certainty. Route details retain exact quantities, cumulative depth, advisory links, buffers, source timestamps, confidence grades, patch health, and allocator blockers.
+
+Completed manual paper or actual executions calibrate future entry cost, exit proceeds, and elapsed lock time without inferring gameplay. Robust medians are shrunk toward the original estimate; two exact-route records or five independent peer-family records are required, with exact route/version/patch/league evidence preferred on equal strength. Planned active effort remains separate from observed elapsed duration.
 
 ## Known limits
 

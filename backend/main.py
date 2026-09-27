@@ -14,6 +14,7 @@ import hmac
 import tempfile
 import sys
 from typing import Literal
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 import database
@@ -1011,19 +1012,72 @@ async def resolve_active_poe_patch(league: str) -> str | None:
     registry = strategies.default_div_card_registry()
     return registry.poe_patch if league in registry.verified_leagues else None
 
+def _fresh_divine_budget_rate(latest: dict) -> tuple[float | None, dict | None, str | None]:
+    rows = latest.get("Currency") or []
+    row = next(
+        (
+            item for item in rows
+            if str(item.get("item_id") or "").casefold() == "divine"
+            or str(item.get("item_name") or "").casefold() == "divine orb"
+        ),
+        None,
+    )
+    if not isinstance(row, dict):
+        return None, None, "WAIT: observed Chaos per Divine rate is unavailable for this league"
+    observation_type = str(row.get("observation_type") or "")
+    source = str(row.get("source") or "")
+    if observation_type in {"ESTIMATED", "SYNTHETIC"} or any(
+        token in source.casefold() for token in ("synthetic", "reconstructed")
+    ):
+        return None, None, "WAIT: Chaos per Divine evidence is not a direct market observation"
+    observed_at = row.get("observed_at") or row.get("timestamp") or row.get("market_timestamp")
+    try:
+        observed = datetime.fromisoformat(str(observed_at).replace("Z", "+00:00"))
+        if observed.tzinfo is None:
+            observed = observed.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return None, None, "WAIT: Chaos per Divine observation timestamp is unavailable"
+    if datetime.now(timezone.utc) - observed.astimezone(timezone.utc) > timedelta(hours=24):
+        return None, None, "WAIT: Chaos per Divine observation is older than 24 hours"
+    value = row.get("price_chaos")
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(float(value))
+        or value <= 0
+    ):
+        return None, None, "WAIT: observed Chaos per Divine rate is invalid"
+    return float(value), {
+        "source": source or "unknown",
+        "observed_at": observed.astimezone(timezone.utc).isoformat(timespec="seconds"),
+        "observation_type": observation_type or None,
+        "confidence_grade": row.get("confidence_grade"),
+        "max_age_hours": 24,
+    }, None
+
+
 def _route_planner_capture(
     *,
     league: str,
     category: str | None,
-    budget_chaos: float | None,
+    budget_amount: float | None,
+    budget_currency: str,
     horizon_hours: float | None,
     minimum_safe_profit_chaos: float | None,
     execution_bias_percent: float | None,
+    minimum_roi_percent: float | None,
+    maximum_active_effort_hours: float | None,
+    maximum_lock_time_hours: float | None,
+    family: str | None,
+    lifecycle: str | None,
+    deterministic_only: bool,
+    sort: str,
 ) -> dict:
     return {
         "league": league,
         "category": category,
-        "budget_chaos": float(budget_chaos) if budget_chaos is not None else None,
+        "budget_amount": float(budget_amount) if budget_amount is not None else None,
+        "budget_currency": budget_currency,
         "horizon_hours": float(horizon_hours) if horizon_hours is not None else None,
         "minimum_safe_profit_chaos": (
             float(minimum_safe_profit_chaos) if minimum_safe_profit_chaos is not None else None
@@ -1031,6 +1085,13 @@ def _route_planner_capture(
         "execution_bias_percent": (
             float(execution_bias_percent) if execution_bias_percent is not None else None
         ),
+        "minimum_roi_percent": minimum_roi_percent,
+        "maximum_active_effort_hours": maximum_active_effort_hours,
+        "maximum_lock_time_hours": maximum_lock_time_hours,
+        "family": family,
+        "lifecycle": lifecycle,
+        "deterministic_only": deterministic_only,
+        "sort": sort,
     }
 
 
@@ -1070,10 +1131,18 @@ class RoutePlanningRequest(BaseModel):
     league: str = Field(min_length=1)
     transformation_id: str = Field(min_length=1)
     category: str | None = None
-    budget_chaos: float | None = None
+    budget_amount: float | None = None
+    budget_currency: Literal["Chaos", "Divine"] = "Chaos"
     horizon_hours: float | None = None
     minimum_safe_profit_chaos: float | None = None
     execution_bias_percent: float | None = None
+    minimum_roi_percent: float | None = None
+    maximum_active_effort_hours: float | None = None
+    maximum_lock_time_hours: float | None = None
+    family: str | None = None
+    lifecycle: Literal["Experimental", "Validated", "Rejected", "Deprecated"] | None = None
+    deterministic_only: bool = False
+    sort: Literal["safe_profit_per_active_hour", "roi", "divine_per_hour"] = "safe_profit_per_active_hour"
 
 
 class RouteExecutionCaptureRequest(RoutePlanningRequest):
@@ -1111,20 +1180,27 @@ async def get_profit_routes(
     league: str,
     category: str | None = None,
     poe_patch: str | None = None,
-    budget_chaos: float | None = None,
+    budget_amount: float | None = None,
+    budget_currency: Literal["Chaos", "Divine"] = "Chaos",
     horizon_hours: float | None = None,
     minimum_safe_profit_chaos: float | None = None,
     execution_bias_percent: float | None = None,
+    minimum_roi_percent: float | None = None,
+    maximum_active_effort_hours: float | None = None,
+    maximum_lock_time_hours: float | None = None,
+    family: str | None = None,
+    lifecycle: Literal["Experimental", "Validated", "Rejected", "Deprecated"] | None = None,
+    deterministic_only: bool = False,
+    sort: Literal["safe_profit_per_active_hour", "roi", "divine_per_hour"] = "safe_profit_per_active_hour",
 ):
-    """Evaluate read-only routes and optional budget-bounded manual batch plans.
-
-    ``poe_patch`` is retained only for response compatibility; callers cannot
-    override the active metadata used for verification.
-    """
-    for name, amount in (
-        ("budget_chaos", budget_chaos),
+    """Evaluate and rank read-only routes with backend-normalized planning units."""
+    positive_inputs = (
+        ("budget_amount", budget_amount),
         ("horizon_hours", horizon_hours),
-    ):
+        ("maximum_active_effort_hours", maximum_active_effort_hours),
+        ("maximum_lock_time_hours", maximum_lock_time_hours),
+    )
+    for name, amount in positive_inputs:
         if amount is not None and (
             isinstance(amount, bool)
             or not isinstance(amount, (int, float))
@@ -1132,16 +1208,17 @@ async def get_profit_routes(
             or amount <= 0
         ):
             raise HTTPException(status_code=400, detail=f"{name} must be a finite positive number")
-    if minimum_safe_profit_chaos is not None and (
-        isinstance(minimum_safe_profit_chaos, bool)
-        or not isinstance(minimum_safe_profit_chaos, (int, float))
-        or not math.isfinite(float(minimum_safe_profit_chaos))
-        or minimum_safe_profit_chaos < 0
+    for name, amount in (
+        ("minimum_safe_profit_chaos", minimum_safe_profit_chaos),
+        ("minimum_roi_percent", minimum_roi_percent),
     ):
-        raise HTTPException(
-            status_code=400,
-            detail="minimum_safe_profit_chaos must be finite and non-negative",
-        )
+        if amount is not None and (
+            isinstance(amount, bool)
+            or not isinstance(amount, (int, float))
+            or not math.isfinite(float(amount))
+            or amount < 0
+        ):
+            raise HTTPException(status_code=400, detail=f"{name} must be finite and non-negative")
     if execution_bias_percent is not None and (
         isinstance(execution_bias_percent, bool)
         or not isinstance(execution_bias_percent, (int, float))
@@ -1157,10 +1234,28 @@ async def get_profit_routes(
     }:
         raise HTTPException(status_code=400, detail=f"unknown category: {category}")
     active_poe_patch = await resolve_active_poe_patch(league)
-    market = _latest_market_context(await market_data.get_all_latest(league))
-    context = {"league": league, "category": category, "active_poe_patch": active_poe_patch, **market}
+    latest = await market_data.get_all_latest(league)
+    market = _latest_market_context(latest)
+    records = await portfolio.route_execution_records(league=league)
+    chaos_per_divine, rate_provenance, rate_blocker = _fresh_divine_budget_rate(latest)
+    normalization_blocker = None
+    budget_chaos = None
+    if budget_amount is not None:
+        if budget_currency == "Chaos":
+            budget_chaos = float(budget_amount)
+        elif chaos_per_divine is None:
+            normalization_blocker = rate_blocker
+        else:
+            budget_chaos = float(budget_amount) * chaos_per_divine
+    context = {
+        "league": league,
+        "category": category,
+        "active_poe_patch": active_poe_patch,
+        "route_execution_records": records,
+        **market,
+    }
     if budget_chaos is not None:
-        context["budget_chaos"] = float(budget_chaos)
+        context["budget_chaos"] = budget_chaos
     if horizon_hours is not None:
         context["capacity_horizon_hours"] = float(horizon_hours)
     if minimum_safe_profit_chaos is not None:
@@ -1180,8 +1275,7 @@ async def get_profit_routes(
             active_poe_patch=active_poe_patch,
             price_keys=list(market["price_records"]),
         )
-        if div_registry is not None
-        else None
+        if div_registry is not None else None
     )
     if not active_poe_patch:
         patch_reasons = ["active PoE patch metadata is unknown; divination-card recipes are withheld"]
@@ -1193,48 +1287,106 @@ async def get_profit_routes(
         ]
     else:
         patch_reasons = ["active PoE patch metadata resolved"]
-    if not active_poe_patch:
-        patch_status = "unknown"
-    elif div_registry is not None and active_poe_patch != div_registry.poe_patch:
-        patch_status = "mismatch"
-    else:
-        patch_status = "resolved"
+    patch_status = (
+        "unknown" if not active_poe_patch
+        else "mismatch" if div_registry is not None and active_poe_patch != div_registry.poe_patch
+        else "resolved"
+    )
     card_routes = []
     if div_registry is not None and active_poe_patch == div_registry.poe_patch:
         card_routes = list(strategies.DivinationCardStrategyProvider(div_registry).evaluate(context))
         routes.extend(card_routes)
     if registry_health is not None:
         registry_health["shadow_evaluation"] = [
-            {
-                "id": route.transformation_id,
-                "status": route.status,
-                "reasons": list(route.reasons),
-            }
+            {"id": route.transformation_id, "status": route.status, "reasons": list(route.reasons)}
             for route in card_routes
         ]
-    records = await portfolio.route_execution_records(league=league)
     planner_capture = _route_planner_capture(
         league=league,
         category=category,
-        budget_chaos=budget_chaos,
+        budget_amount=budget_amount,
+        budget_currency=budget_currency,
         horizon_hours=horizon_hours,
         minimum_safe_profit_chaos=minimum_safe_profit_chaos,
         execution_bias_percent=execution_bias_percent,
+        minimum_roi_percent=minimum_roi_percent,
+        maximum_active_effort_hours=maximum_active_effort_hours,
+        maximum_lock_time_hours=maximum_lock_time_hours,
+        family=family,
+        lifecycle=lifecycle,
+        deterministic_only=deterministic_only,
+        sort=sort,
     )
     route_payloads = []
-    for route in sorted(
-        routes,
-        key=lambda item: (
-            item.status != "executable",
-            -(item.expected_net_profit if item.expected_net_profit > 0 else 0),
-            item.name,
-        ),
-    ):
+    for route in routes:
+        route_lifecycle = str(route.verification_metadata.get("strategy_lifecycle") or "Experimental")
+        effort = route.batch_plan.active_effort_hours if route.batch_plan else route.active_execution_time
+        lock_time = route.batch_plan.lock_time_max_hours if route.batch_plan else route.capital_lock_time
+        safe_profit = (
+            route.batch_plan.executable_net_chaos
+            if route.batch_plan else route.safe_edge_chaos
+        )
+        evaluated_cost = (
+            route.batch_plan.executable_cost_chaos
+            if route.batch_plan else route.total_input_cost
+        )
+        evaluated_roi = safe_profit / evaluated_cost if evaluated_cost > 0 else 0.0
+        route_groups = {
+            "deterministic" if route.certainty == strategies.RouteCertainty.DETERMINISTIC else None,
+            "divination_cards" if route.strategy_family == "divination_card" else None,
+            "conversions" if route.category in {
+                "Assembly", "VendorTransformation", "ArbitrageGraph", "SixLink",
+            } else None,
+            "bounded_ev" if route.certainty == strategies.RouteCertainty.BOUNDED_EV else None,
+            "watch_unsupported" if route.status not in {"executable", "manual_only"} else None,
+        }
+        if family and family not in route_groups:
+            continue
+        if lifecycle and route_lifecycle != lifecycle:
+            continue
+        if deterministic_only and route.certainty != strategies.RouteCertainty.DETERMINISTIC:
+            continue
+        if minimum_roi_percent is not None and evaluated_roi * 100 < minimum_roi_percent:
+            continue
+        if maximum_active_effort_hours is not None and effort > maximum_active_effort_hours:
+            continue
+        if maximum_lock_time_hours is not None and lock_time > maximum_lock_time_hours:
+            continue
         evidence = strategies.route_allocator_evidence(route, records)
         version = strategies.route_version(route)
         payload = route.model_dump(mode="json")
         payload["actual_net_profit"] = evidence["actual_net_profit_chaos"]
         payload["allocator_evidence"] = evidence
+        payload["lifecycle"] = route_lifecycle
+        payload["ranking"] = {
+            "safe_profit_per_active_hour": (
+                safe_profit * route.confidence / max(0.25, effort)
+            ),
+            "roi": evaluated_roi,
+            "divine_per_hour": (
+                safe_profit / max(0.25, effort) / chaos_per_divine
+                if chaos_per_divine is not None else None
+            ),
+            "roi_per_lock_hour": route.roi_per_lock_hour,
+            "confidence": route.confidence,
+        }
+        if (
+            route.status == "executable"
+            and route.batch_plan is not None
+            and route.safe_edge_chaos > 0
+        ):
+            section = "best_actionable"
+        elif route.certainty == strategies.RouteCertainty.BOUNDED_EV:
+            section = "bounded_ev"
+        elif route.status not in {"executable", "manual_only"}:
+            section = "watch_unsupported"
+        elif route.strategy_family == "divination_card":
+            section = "divination_cards"
+        elif route.category in {"Assembly", "VendorTransformation", "ArbitrageGraph", "SixLink"}:
+            section = "conversions"
+        else:
+            section = "deterministic"
+        payload["section"] = section
         payload["snapshot_id"] = _route_snapshot_id(_route_capture(route, planner_capture))
         payload["recent_executions"] = [
             record for record in records
@@ -1243,13 +1395,64 @@ async def get_profit_routes(
             and record["poe_patch"] == route.poe_patch
         ][-5:]
         route_payloads.append(payload)
+    route_payloads.sort(key=lambda item: (
+        item["ranking"][sort] is None,
+        -float(item["ranking"][sort] or 0),
+        item["name"],
+    ))
+    section_reasons = {
+        "best_actionable": (
+            normalization_blocker
+            or "No executable route passed the current budget, safety, evidence, and filter constraints."
+        ),
+        "deterministic": "No remaining deterministic route passed the current filters.",
+        "divination_cards": "No remaining divination-card route passed the current filters and patch checks.",
+        "conversions": "No remaining verified conversion route is ready; see provider readiness blockers.",
+        "bounded_ev": "No remaining route has an authoritative complete bounded-outcome distribution.",
+        "watch_unsupported": "No remaining route is waiting on evidence, liquidity, patch, or provider readiness.",
+    }
+    sections = [
+        {
+            "key": section,
+            "label": section.replace("_", " ").title(),
+            "route_ids": [
+                route["transformation_id"] for route in route_payloads if route["section"] == section
+            ],
+            "reason": (
+                None if any(route["section"] == section for route in route_payloads)
+                else section_reasons[section]
+            ),
+        }
+        for section in (
+            "best_actionable", "deterministic", "divination_cards",
+            "conversions", "bounded_ev", "watch_unsupported",
+        )
+    ]
     response = {
         "league": league,
         "category": category,
         "poe_patch": active_poe_patch,
         "patch_status": patch_status,
         "patch_reasons": patch_reasons,
+        "planning": {
+            "requested_amount": budget_amount,
+            "requested_currency": budget_currency,
+            "budget_chaos": budget_chaos,
+            "chaos_per_divine": chaos_per_divine,
+            "rate_provenance": rate_provenance,
+            "normalization_blocker": normalization_blocker,
+            "applied_filters": {
+                "minimum_roi_percent": minimum_roi_percent,
+                "maximum_active_effort_hours": maximum_active_effort_hours,
+                "maximum_lock_time_hours": maximum_lock_time_hours,
+                "family": family,
+                "lifecycle": lifecycle,
+                "deterministic_only": deterministic_only,
+                "sort": sort,
+            },
+        },
         "deterministic_readiness": deterministic_readiness,
+        "sections": sections,
         "routes": route_payloads,
     }
     if registry_health is not None:
@@ -1267,10 +1470,18 @@ async def capture_route_execution(request: RouteExecutionCaptureRequest):
     response = await get_profit_routes(
         league=request.league,
         category=request.category,
-        budget_chaos=request.budget_chaos,
+        budget_amount=request.budget_amount,
+        budget_currency=request.budget_currency,
         horizon_hours=request.horizon_hours,
         minimum_safe_profit_chaos=request.minimum_safe_profit_chaos,
         execution_bias_percent=request.execution_bias_percent,
+        minimum_roi_percent=request.minimum_roi_percent,
+        maximum_active_effort_hours=request.maximum_active_effort_hours,
+        maximum_lock_time_hours=request.maximum_lock_time_hours,
+        family=request.family,
+        lifecycle=request.lifecycle,
+        deterministic_only=request.deterministic_only,
+        sort=request.sort,
     )
     payload = next(
         (
@@ -1298,10 +1509,18 @@ async def capture_route_execution(request: RouteExecutionCaptureRequest):
     planner_capture = _route_planner_capture(
         league=request.league,
         category=request.category,
-        budget_chaos=request.budget_chaos,
+        budget_amount=request.budget_amount,
+        budget_currency=request.budget_currency,
         horizon_hours=request.horizon_hours,
         minimum_safe_profit_chaos=request.minimum_safe_profit_chaos,
         execution_bias_percent=request.execution_bias_percent,
+        minimum_roi_percent=request.minimum_roi_percent,
+        maximum_active_effort_hours=request.maximum_active_effort_hours,
+        maximum_lock_time_hours=request.maximum_lock_time_hours,
+        family=request.family,
+        lifecycle=request.lifecycle,
+        deterministic_only=request.deterministic_only,
+        sort=request.sort,
     )
     try:
         execution = await portfolio.capture_route_execution(

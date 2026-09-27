@@ -152,6 +152,8 @@ class ProfitRoute(BaseModel):
     outputs: list[dict[str, Any]] = Field(default_factory=list)
     execution_steps: list[str] = Field(default_factory=list)
     batch_plan: BatchPlan | None = None
+    calibration: dict[str, Any] = Field(default_factory=dict)
+
 
     def to_investable(
         self,
@@ -249,6 +251,132 @@ class ProfitRoute(BaseModel):
 
 def route_version(route: ProfitRoute) -> str:
     return str(route.verification_metadata.get("registry_version") or route.verified_version)
+
+ROUTE_CALIBRATION_EXACT_MINIMUM = 2
+ROUTE_CALIBRATION_FAMILY_MINIMUM = 5
+ROUTE_CALIBRATION_PRIOR_STRENGTH = 3.0
+
+
+def _record_route_identity(record: Mapping[str, Any]) -> tuple[str | None, str | None]:
+    snapshot = record.get("route_snapshot") or {}
+    route = snapshot.get("route") if isinstance(snapshot, Mapping) else None
+    if not isinstance(route, Mapping):
+        return None, None
+    return route.get("transformation_id"), route.get("strategy_family")
+
+
+def _record_calibration_ratios(record: Mapping[str, Any]) -> tuple[float, float, float] | None:
+    if record.get("status") != "completed":
+        return None
+    snapshot = record.get("route_snapshot") or {}
+    route = snapshot.get("route") if isinstance(snapshot, Mapping) else None
+    calibration = route.get("calibration") if isinstance(route, Mapping) else None
+    baseline = calibration.get("baseline") if isinstance(calibration, Mapping) else None
+    predicted_cost = (
+        baseline.get("cost_chaos")
+        if isinstance(baseline, Mapping) else record.get("predicted_cost_chaos")
+    )
+    predicted_revenue = (
+        baseline.get("revenue_chaos")
+        if isinstance(baseline, Mapping) else record.get("predicted_revenue_chaos")
+    )
+    predicted_duration = (
+        baseline.get("lock_time_hours")
+        if isinstance(baseline, Mapping) else record.get("predicted_duration_hours")
+    )
+    values = (
+        record.get("actual_cost_chaos"), record.get("actual_revenue_chaos"),
+        record.get("actual_duration_hours"), predicted_cost, predicted_revenue,
+        predicted_duration,
+    )
+    if any(value is None or not math.isfinite(float(value)) for value in values):
+        return None
+    actual_cost, actual_revenue, actual_duration, predicted_cost, predicted_revenue, predicted_duration = (
+        float(value) for value in values
+    )
+    if min(actual_cost, predicted_cost, predicted_revenue, predicted_duration) <= 0:
+        return None
+    if actual_revenue < 0 or actual_duration < 0:
+        return None
+    return (
+        actual_cost / predicted_cost,
+        actual_revenue / predicted_revenue,
+        actual_duration / predicted_duration,
+    )
+
+
+def route_execution_calibration(
+    *,
+    route_id: str,
+    strategy_family: str,
+    league: str | None,
+    route_version_value: str,
+    poe_patch: str | None,
+    records: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Estimate residual fill and elapsed-lock friction without crossing identity boundaries."""
+    exact: list[tuple[float, float, float]] = []
+    family: list[tuple[float, float, float]] = []
+    for record in records:
+        if (
+            record.get("league") != league
+            or record.get("route_version") != route_version_value
+            or record.get("poe_patch") != poe_patch
+        ):
+            continue
+        record_route_id, record_family = _record_route_identity(record)
+        ratios = _record_calibration_ratios(record)
+        if ratios is None:
+            continue
+        if record_route_id == route_id:
+            exact.append(ratios)
+        elif record_family == strategy_family:
+            family.append(ratios)
+    exact_qualified = len(exact) >= ROUTE_CALIBRATION_EXACT_MINIMUM
+    family_qualified = len(family) >= ROUTE_CALIBRATION_FAMILY_MINIMUM
+    if exact_qualified and (not family_qualified or len(exact) >= len(family)):
+        selected, scope, minimum = exact, "exact_route", ROUTE_CALIBRATION_EXACT_MINIMUM
+        fallback_reason = "exact route selected; ties prefer the more specific identity"
+    elif family_qualified:
+        selected, scope, minimum = family, "strategy_family", ROUTE_CALIBRATION_FAMILY_MINIMUM
+        fallback_reason = (
+            "independent peer-route family evidence is stronger than exact-route evidence"
+            if exact_qualified else "exact route has fewer than 2 completed baseline observations"
+        )
+    else:
+        return {
+            "applied": False,
+            "scope": None,
+            "sample_size": max(len(exact), len(family)),
+            "exact_sample_size": len(exact),
+            "family_sample_size": len(family),
+            "minimum_samples": ROUTE_CALIBRATION_EXACT_MINIMUM,
+            "family_minimum_samples": ROUTE_CALIBRATION_FAMILY_MINIMUM,
+            "prior_strength": ROUTE_CALIBRATION_PRIOR_STRENGTH,
+            "fallback_reason": (
+                "unchanged: exact route needs 2 completed observations or "
+                "5 independent peer-route observations to reduce route-specific noise"
+            ),
+            "factors": {"entry": 1.0, "exit": 1.0, "duration": 1.0},
+        }
+    count = len(selected)
+    weight = count / (count + ROUTE_CALIBRATION_PRIOR_STRENGTH)
+    medians = [statistics.median(values) for values in zip(*selected, strict=True)]
+    factors = [1.0 + weight * (value - 1.0) for value in medians]
+    return {
+        "applied": True,
+        "scope": scope,
+        "sample_size": count,
+        "exact_sample_size": len(exact),
+        "family_sample_size": len(family),
+        "minimum_samples": minimum,
+        "family_minimum_samples": ROUTE_CALIBRATION_FAMILY_MINIMUM,
+        "prior_strength": ROUTE_CALIBRATION_PRIOR_STRENGTH,
+        "weight": weight,
+        "fallback_reason": fallback_reason,
+        "observed_medians": dict(zip(("entry", "exit", "duration"), medians, strict=True)),
+        "factors": dict(zip(("entry", "exit", "duration"), factors, strict=True)),
+    }
 
 
 def route_allocator_evidence(
@@ -554,12 +682,35 @@ class TransformationStrategyProvider:
             theoretical_net = output_value * (1 - sale_fee) - cost - execution_cost
             execution_bias = float(context.get("execution_bias_rate", 0) or 0)
             minimum_safe_profit = float(context.get("minimum_safe_profit_chaos", 0) or 0)
-            adjusted_cost = cost * (1 + execution_bias)
-            adjusted_output = output_value * (1 - execution_bias)
-            safe_net = adjusted_output * (1 - sale_fee) - adjusted_cost - execution_cost
+            baseline_cost = cost * (1 + execution_bias)
+            baseline_revenue = output_value * (1 - execution_bias) * (1 - sale_fee)
             duration = float(recipe["expected_execution_time_hours"])
             sale_time = float(recipe["expected_sale_time_hours"])
-            total_time = max(0.25, duration + sale_time)
+            baseline_total_time = max(0.25, duration + sale_time)
+            calibration = route_execution_calibration(
+                route_id=str(recipe["id"]),
+                strategy_family=str(recipe["strategy_family"]),
+                league=league,
+                route_version_value=str(recipe["verified_version"]),
+                poe_patch=recipe.get("poe_patch"),
+                records=context.get("route_execution_records", ()),
+            )
+            factors = calibration["factors"]
+            adjusted_cost = baseline_cost * float(factors["entry"])
+            adjusted_revenue = baseline_revenue * float(factors["exit"])
+            adjusted_output = adjusted_revenue / (1 - sale_fee) if sale_fee < 1 else 0.0
+            safe_net = adjusted_revenue - adjusted_cost - execution_cost
+            total_time = baseline_total_time * float(factors["duration"])
+            calibration["baseline"] = {
+                "batch_count": 1,
+                "cost_chaos": baseline_cost,
+                "revenue_chaos": baseline_revenue,
+                "lock_time_hours": baseline_total_time,
+            }
+            calibration["adjustments_chaos"] = {
+                "entry": adjusted_cost - baseline_cost,
+                "exit": baseline_revenue - adjusted_revenue,
+            }
             lifecycle = StrategyLifecycle(recipe["status"])
             strategy_confidence = float(recipe.get(
                 "strategy_confidence",
@@ -612,6 +763,8 @@ class TransformationStrategyProvider:
                 "listing_haircut_treatment": "not_applicable",
                 "execution_bias_rate": execution_bias,
                 "execution_bias_chaos": cost * execution_bias + output_value * (1 - sale_fee) * execution_bias,
+                "calibration_entry_chaos": adjusted_cost - baseline_cost,
+                "calibration_exit_chaos": baseline_revenue - adjusted_revenue,
                 "minimum_safe_profit_chaos": minimum_safe_profit,
                 "stale_quote_policy": "hard_block_no_numeric_penalty",
             }
@@ -674,11 +827,13 @@ class TransformationStrategyProvider:
                     "price_sources": sorted(source_values),
                     "price_observations": [info.get("observation_type") for info in priced],
                     "observed_at": [info.get("observed_at") for info in priced if info.get("observed_at")],
+                    "strategy_lifecycle": lifecycle.value,
                 },
                 inputs=recipe["inputs"],
                 costs=recipe["deterministic_costs"] + recipe["probabilistic_costs"],
                 outputs=recipe["outputs"],
                 execution_steps=recipe["manual_actions"],
+                calibration=calibration,
             ))
         return routes
 
@@ -1247,6 +1402,8 @@ def evaluate_batch_ladder(
     capital_lock_time: float,
     sale_fee_rate: float = 0.0,
     execution_bias_rate: float = 0.0,
+    entry_calibration_factor: float = 1.0,
+    exit_calibration_factor: float = 1.0,
 ) -> list[dict[str, Any]]:
     """Evaluate mutually exclusive outcomes conditionally, then weight EV."""
     if not buy_quote or len(sell_quotes) != len(outcomes) or any(quote is None for quote in sell_quotes):
@@ -1261,7 +1418,8 @@ def evaluate_batch_ladder(
         raw_input = buy_fill[0]
         input_before_bias = raw_input * (1 + float(buy_quote["fee"]))
         input_bias = input_before_bias * execution_bias_rate
-        input_cost = input_before_bias + input_bias
+        baseline_input_cost = input_before_bias + input_bias
+        input_cost = baseline_input_cost * entry_calibration_factor
         if budget_chaos > 0 and input_cost > budget_chaos + 1e-9:
             if ladder:
                 ladder[-1]["binding_constraint"] = "budget"
@@ -1270,6 +1428,7 @@ def evaluate_batch_ladder(
             if ladder:
                 ladder[-1]["binding_constraint"] = "time_horizon"
             break
+        baseline_output_value = 0.0
         output_value = 0.0
         raw_output_value = 0.0
         output_fee_adjustment = 0.0
@@ -1286,14 +1445,16 @@ def evaluate_batch_ladder(
             raw_liquidation = sell_fill[0]
             after_quote_fee = raw_liquidation * (1 - float(quote["fee"]))
             after_fee = after_quote_fee * (1 - sale_fee_rate)
-            liquidation = after_fee * (1 - execution_bias_rate)
+            baseline_liquidation = after_fee * (1 - execution_bias_rate)
+            liquidation = baseline_liquidation * exit_calibration_factor
             probability = float(outcome["probability"])
             liquidation_values.append(liquidation)
             expected_quantities.append(batch_size * float(outcome["reward_quantity"]) * probability)
             outcome_capacities.append(int(sum(float(level["quantity"]) for level in quote["levels"]) // float(outcome["reward_quantity"])))
             raw_output_value += probability * raw_liquidation
             output_fee_adjustment += probability * (raw_liquidation - after_fee)
-            output_bias_adjustment += probability * (after_fee - liquidation)
+            output_bias_adjustment += probability * (after_fee - baseline_liquidation)
+            baseline_output_value += probability * baseline_liquidation
             output_value += probability * liquidation
         net = output_value - input_cost
         previous_net = ladder[-1]["safe_net_chaos"] if ladder else 0.0
@@ -1305,6 +1466,8 @@ def evaluate_batch_ladder(
             "batch_size": batch_size,
             "input_cost_chaos": input_cost,
             "executable_output_chaos": output_value,
+            "baseline_cost_chaos": baseline_input_cost,
+            "baseline_revenue_chaos": baseline_output_value,
             "safe_net_chaos": net,
             "roi": net / input_cost,
             "liquidation_values_chaos": liquidation_values,
@@ -1317,6 +1480,8 @@ def evaluate_batch_ladder(
                 "output_discount_chaos": 0.0,
                 "raw_input_fill_chaos": raw_input,
                 "raw_output_fill_chaos": raw_output_value,
+                "calibration_entry_chaos": input_cost - baseline_input_cost,
+                "calibration_exit_chaos": baseline_output_value - output_value,
             },
             "binding_constraint": "recipe_max_batch",
         })
@@ -1337,6 +1502,8 @@ def evaluate_deterministic_batch_ladder(
     output_discount_rate: float = 0.0,
     friction_chaos: float = 0.0,
     execution_bias_rate: float = 0.0,
+    entry_calibration_factor: float = 1.0,
+    exit_calibration_factor: float = 1.0,
 ) -> list[dict[str, Any]]:
     """Consume every deterministic leg cumulatively for each complete batch."""
     legs = [*zip(inputs, input_quotes, strict=True), *zip(conversion_costs, cost_quotes, strict=True)]
@@ -1358,12 +1525,13 @@ def evaluate_deterministic_batch_ladder(
                 break
             before_bias = fill[0] * (1 + float(quote["fee"]))
             bias = before_bias * execution_bias_rate
-            input_cost += before_bias + bias
+            input_cost += (before_bias + bias) * entry_calibration_factor
             input_fee_adjustment += fill[0] * float(quote["fee"])
             input_bias_adjustment += bias
             input_fills.append(fill[0])
         else:
-            input_cost += batch_size * float(friction_chaos)
+            input_cost += batch_size * float(friction_chaos) * entry_calibration_factor
+            baseline_input_cost = input_cost / entry_calibration_factor
             if budget_chaos > 0 and input_cost > budget_chaos + 1e-9:
                 if ladder:
                     ladder[-1]["binding_constraint"] = "budget"
@@ -1372,6 +1540,7 @@ def evaluate_deterministic_batch_ladder(
                 if ladder:
                     ladder[-1]["binding_constraint"] = "time_horizon"
                 break
+            baseline_output_value = 0.0
             output_value = 0.0
             output_fee_adjustment = 0.0
             output_discount_adjustment = 0.0
@@ -1386,11 +1555,13 @@ def evaluate_deterministic_batch_ladder(
                 after_quote_fee = fill[0] * (1 - float(quote["fee"]))
                 after_output_discount = after_quote_fee * (1 - float(output_discount_rate))
                 after_sale_fee = after_output_discount * (1 - float(sale_fee_rate))
-                after_bias = after_sale_fee * (1 - execution_bias_rate)
+                baseline_output = after_sale_fee * (1 - execution_bias_rate)
+                after_bias = baseline_output * exit_calibration_factor
+                baseline_output_value += baseline_output
                 output_value += after_bias
                 output_fee_adjustment += fill[0] - after_quote_fee + after_output_discount - after_sale_fee
                 output_discount_adjustment += after_quote_fee - after_output_discount
-                output_bias_adjustment += after_sale_fee - after_bias
+                output_bias_adjustment += after_sale_fee - baseline_output
                 output_fills.append(fill[0])
             else:
                 net = output_value - input_cost
@@ -1402,6 +1573,8 @@ def evaluate_deterministic_batch_ladder(
                     "batch_size": batch_size,
                     "input_cost_chaos": input_cost,
                     "executable_output_chaos": output_value,
+                    "baseline_cost_chaos": baseline_input_cost,
+                    "baseline_revenue_chaos": baseline_output_value,
                     "safe_net_chaos": net,
                     "roi": net / input_cost if input_cost > 0 else 0.0,
                     "input_fills_chaos": input_fills,
@@ -1413,6 +1586,8 @@ def evaluate_deterministic_batch_ladder(
                         "output_discount_chaos": output_discount_adjustment,
                         "raw_input_fill_chaos": sum(input_fills),
                         "raw_output_fill_chaos": sum(output_fills),
+                        "calibration_entry_chaos": input_cost - baseline_input_cost,
+                        "calibration_exit_chaos": baseline_output_value - output_value,
                     },
                     "binding_constraint": "record_max_batch",
                 })
@@ -1496,6 +1671,17 @@ class DivinationCardStrategyProvider:
             theoretical_net = (theoretical_output * (1 - float(recipe.get("sale_fee_rate", 0))) - theoretical_cost) if theoretical_output is not None and theoretical_cost else None
             active_time = float(recipe["expected_execution_time_hours"])
             capital_lock_time = max(0.25, active_time + float(recipe["expected_sale_time_hours"]))
+            calibration = route_execution_calibration(
+                route_id=str(recipe["id"]),
+                strategy_family="divination_card",
+                league=league,
+                route_version_value=self.registry.version,
+                poe_patch=recipe["poe_patch"],
+                records=context.get("route_execution_records", ()),
+            )
+            factors = calibration["factors"]
+            baseline_lock_time = capital_lock_time
+            capital_lock_time *= float(factors["duration"])
             if recipe["card_market_key"] in ambiguous_market_keys:
                 buy_quote = None
                 buy_evidence = _reference_leg(recipe["card_market_key"], "input", card_price or {})
@@ -1551,7 +1737,7 @@ class DivinationCardStrategyProvider:
             minimum_safe_profit = float(context.get("minimum_safe_profit_chaos", 0) or 0)
             first_buy = _consume_depth(buy_quote["levels"], recipe["set_size"], buy=True) if buy_quote else None
             executable_cost = (
-                first_buy[0] * (1 + buy_quote["fee"]) * (1 + execution_bias)
+                first_buy[0] * (1 + buy_quote["fee"]) * (1 + execution_bias) * float(factors["entry"])
                 if first_buy and buy_quote else None
             )
             executable_output = None
@@ -1562,7 +1748,11 @@ class DivinationCardStrategyProvider:
                     if fill is None:
                         executable_output = None
                         break
-                    liquidation = fill[0] * (1 - quote["fee"]) * (1 - float(recipe.get("sale_fee_rate", 0))) * (1 - execution_bias)
+                    liquidation = (
+                        fill[0] * (1 - quote["fee"])
+                        * (1 - float(recipe.get("sale_fee_rate", 0)))
+                        * (1 - execution_bias) * float(factors["exit"])
+                    )
                     executable_output += float(outcome["probability"]) * liquidation
             complete_execution = executable_cost is not None and executable_output is not None
             executable_roi = (
@@ -1576,6 +1766,8 @@ class DivinationCardStrategyProvider:
                 "capital_lock_time": capital_lock_time,
                 "execution_bias_rate": execution_bias,
                 "sale_fee_rate": float(recipe.get("sale_fee_rate", 0)),
+                "entry_calibration_factor": float(factors["entry"]),
+                "exit_calibration_factor": float(factors["exit"]),
             }
             market_ladder = evaluate_batch_ladder(
                 **ladder_args, budget_chaos=0, time_horizon_hours=float("inf"),
@@ -1661,6 +1853,8 @@ class DivinationCardStrategyProvider:
                 ),
                 "execution_bias_rate": execution_bias,
                 "execution_bias_chaos": first_adjustments["execution_bias_chaos"],
+                "calibration_entry_chaos": first_adjustments.get("calibration_entry_chaos", 0.0),
+                "calibration_exit_chaos": first_adjustments.get("calibration_exit_chaos", 0.0),
                 "minimum_safe_profit_chaos": minimum_safe_profit,
                 "minimum_safe_profit_units": "total_chaos_per_evaluated_batch",
                 "stale_quote_policy": "hard_block_no_numeric_penalty",
@@ -1721,6 +1915,28 @@ class DivinationCardStrategyProvider:
                     binding_constraint=str(selected["binding_constraint"]),
                     trade_links=trade_links,
                 )
+                calibration["baseline"] = {
+                    "batch_count": set_count,
+                    "cost_chaos": float(selected["baseline_cost_chaos"]),
+                    "revenue_chaos": float(selected["baseline_revenue_chaos"]),
+                    "lock_time_hours": set_count * baseline_lock_time,
+                }
+                calibration["adjustments_chaos"] = {
+                    "entry": float(selected["input_cost_chaos"] - selected["baseline_cost_chaos"]),
+                    "exit": float(selected["baseline_revenue_chaos"] - selected["executable_output_chaos"]),
+                }
+            else:
+                baseline = market_ladder[0] if market_ladder else None
+                calibration["baseline"] = {
+                    "batch_count": 1,
+                    "cost_chaos": float(baseline["baseline_cost_chaos"]) if baseline else None,
+                    "revenue_chaos": float(baseline["baseline_revenue_chaos"]) if baseline else None,
+                    "lock_time_hours": baseline_lock_time,
+                }
+                calibration["adjustments_chaos"] = {
+                    "entry": float(baseline["input_cost_chaos"] - baseline["baseline_cost_chaos"]) if baseline else 0.0,
+                    "exit": float(baseline["baseline_revenue_chaos"] - baseline["executable_output_chaos"]) if baseline else 0.0,
+                }
             route = ProfitRoute(
                 transformation_id=recipe["id"], name=f"{recipe['card']} set arbitrage",
                 strategy_family="divination_card", status=status, league=league, category="DivinationCard",
@@ -1761,10 +1977,12 @@ class DivinationCardStrategyProvider:
                     "quote_kinds": sorted(set(quote_kinds)),
                     "outcome_liquidation": outcome_liquidation, "batch_ladder": recommended_ladder,
                     "eligibility": "deterministic" if recipe["deterministic"] else "trusted_finite_distribution",
+                    "strategy_lifecycle": StrategyLifecycle.EXPERIMENTAL.value,
                 },
                 inputs=[{"item": recipe["card"], "market_key": recipe["card_market_key"], "quantity": recipe["set_size"]}],
                 costs=[{"item": recipe["card"], "market_key": recipe["card_market_key"], "quantity": recipe["set_size"], "side": "buy"}],
                 outputs=outcome_outputs, execution_steps=list(recipe["manual_actions"]), batch_plan=batch_plan,
+                calibration=calibration,
             )
             routes.append(route)
         return routes
@@ -2199,6 +2417,19 @@ def _deferred_route(
     active_time = float(record.get("active_effort_hours", record.get("expected_execution_time_hours", 0.25)))
     capital_lock_time = float(record.get("lock_time_hours", active_time + float(record.get("expected_sale_time_hours", 0))))
     capital_lock_time = max(0.25, capital_lock_time)
+    final_route_id = str(route_id or record["id"])
+    family = str(record.get("strategy_family", "deterministic"))
+    calibration = route_execution_calibration(
+        route_id=final_route_id,
+        strategy_family=family,
+        league=context.get("league"),
+        route_version_value=str(record["verified_version"]),
+        poe_patch=record.get("poe_patch"),
+        records=context.get("route_execution_records", ()),
+    )
+    factors = calibration["factors"]
+    baseline_lock_time = capital_lock_time
+    capital_lock_time *= float(factors["duration"])
     execution_bias = float(context.get("execution_bias_rate", 0) or 0)
     minimum_safe_profit = float(context.get("minimum_safe_profit_chaos", 0) or 0)
     execution_prices = context.get("execution_prices", {})
@@ -2232,6 +2463,8 @@ def _deferred_route(
         "capital_lock_time": capital_lock_time, "sale_fee_rate": sale_fee,
         "output_discount_rate": discount, "friction_chaos": friction,
         "execution_bias_rate": execution_bias,
+        "entry_calibration_factor": float(factors["entry"]),
+        "exit_calibration_factor": float(factors["exit"]),
     }
     market_ladder = evaluate_deterministic_batch_ladder(
         **ladder_args, budget_chaos=0, time_horizon_hours=float("inf"),
@@ -2278,6 +2511,28 @@ def _deferred_route(
             maximum_recommended_batch=batch_size,
             binding_constraint=str(selected["binding_constraint"]),
         )
+        calibration["baseline"] = {
+            "batch_count": batch_size,
+            "cost_chaos": float(selected["baseline_cost_chaos"]),
+            "revenue_chaos": float(selected["baseline_revenue_chaos"]),
+            "lock_time_hours": baseline_lock_time,
+        }
+        calibration["adjustments_chaos"] = {
+            "entry": float(selected["input_cost_chaos"] - selected["baseline_cost_chaos"]),
+            "exit": float(selected["baseline_revenue_chaos"] - selected["executable_output_chaos"]),
+        }
+    else:
+        baseline = market_ladder[0] if market_ladder else None
+        calibration["baseline"] = {
+            "batch_count": 1,
+            "cost_chaos": float(baseline["baseline_cost_chaos"]) if baseline else None,
+            "revenue_chaos": float(baseline["baseline_revenue_chaos"]) if baseline else None,
+            "lock_time_hours": baseline_lock_time,
+        }
+        calibration["adjustments_chaos"] = {
+            "entry": float(baseline["input_cost_chaos"] - baseline["baseline_cost_chaos"]) if baseline else 0.0,
+            "exit": float(baseline["baseline_revenue_chaos"] - baseline["executable_output_chaos"]) if baseline else 0.0,
+        }
     executable = market_ladder[0] if market_ladder else None
     route_status = "executable" if executable and market_eligible else "theoretical"
     reasons = ["verified deterministic transformation", f"definition source: {record['source']} ({record['verified_version']})"]
@@ -2296,8 +2551,8 @@ def _deferred_route(
         reasons.append("manual-only execution; automatic allocation is disabled")
     source_values = sorted({str(info["source"]) for info in prices})
     source = source_values[0] if len(source_values) == 1 else "mixed"
-    fallback_cost = material_cost * (1 + execution_bias) + friction
-    fallback_output = output_value * (1 - sale_fee) * (1 - execution_bias)
+    fallback_cost = (material_cost * (1 + execution_bias) + friction) * float(factors["entry"])
+    fallback_output = output_value * (1 - sale_fee) * (1 - execution_bias) * float(factors["exit"])
     route_cost = float(executable["input_cost_chaos"]) if executable else fallback_cost
     route_output = float(executable["executable_output_chaos"]) if executable else fallback_output
     route_net = float(executable["safe_net_chaos"]) if executable else fallback_output - fallback_cost
@@ -2339,13 +2594,15 @@ def _deferred_route(
         ) else "not_applicable",
         "execution_bias_rate": execution_bias,
         "execution_bias_chaos": selected_adjustments["execution_bias_chaos"],
+        "calibration_entry_chaos": selected_adjustments.get("calibration_entry_chaos", 0.0),
+        "calibration_exit_chaos": selected_adjustments.get("calibration_exit_chaos", 0.0),
         "minimum_safe_profit_chaos": minimum_safe_profit,
         "minimum_safe_profit_units": "total_chaos_per_evaluated_batch",
         "stale_quote_policy": "hard_block_no_numeric_penalty",
     }
     return ProfitRoute(
-        transformation_id=str(route_id or record["id"]), name=str(name or record["name"]),
-        strategy_family=str(record.get("strategy_family", "deterministic")), status=route_status,
+        transformation_id=final_route_id, name=str(name or record["name"]),
+        strategy_family=family, status=route_status,
         league=context.get("league"), category=str(record.get("category", "Transformation")),
         total_input_cost=route_cost, realistic_output_value=route_output,
         gross_profit=route_output - route_cost, expected_net_profit=route_net,
@@ -2370,6 +2627,7 @@ def _deferred_route(
         verification_metadata={"definition_source": record["source"], "verified_version": record["verified_version"], "poe_patch": record.get("poe_patch"), "strategy_lifecycle": record["status"], "price_sources": source_values, "market_keys": [str(item["market_key"]) for item in all_costs + outputs], "linking_method": record.get("linking_method"), "batch_ladder": recommended_ladder},
         inputs=[dict(item) for item in inputs], costs=[dict(item) for item in conversion_costs], outputs=[dict(item) for item in outputs], execution_steps=manual,
         batch_plan=batch_plan,
+        calibration=calibration,
     )
 
 

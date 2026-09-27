@@ -1,249 +1,417 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { api, fmtPrice } from '../lib/helpers'
 import { EmptyState, ErrorState, LoadingState, LeagueEmpty } from './ui'
 
-const value = (item) => {
-  if (item == null || item === '') return '—'
-  if (typeof item === 'number') return fmtPrice(item)
-  if (Array.isArray(item)) return item.map(value).join(', ')
-  if (typeof item === 'object') return Object.entries(item).map(([key, val]) => `${key}: ${value(val)}`).join(' · ')
-  return String(item)
-}
-const ratioPercent = (item) => item == null ? '—' : `${(Number(item) * 100).toFixed(1)}%`
-const tone = (item) => Number(item) < 0 ? 'negative' : 'positive'
-const list = (items) => Array.isArray(items) ? items : items == null ? [] : [items]
-const familyLabels = { assembly: 'Assembly', vendor: 'Vendor', six_link: 'Six-link' }
-const readinessFamilies = (readiness) => readiness && typeof readiness === 'object' && readiness.families && typeof readiness.families === 'object' ? readiness.families : {}
+const list = (v) => Array.isArray(v) ? v : v == null ? [] : [v]
+const text = (v) => v == null || v === '' ? '—' : typeof v === 'number' ? fmtPrice(v) : Array.isArray(v) ? v.map(text).join(', ') : typeof v === 'object' ? Object.entries(v).map(([k, x]) => `${k}: ${text(x)}`).join(' · ') : String(v)
+const percent = (v) => v == null ? '—' : `${(Number(v) * 100).toFixed(1)}%`
+const familyNames = { deterministic: 'Deterministic', divination_cards: 'Divination cards', conversions: 'Conversions', bounded_ev: 'Bounded EV', watch_unsupported: 'Watch / unsupported' }
+const sectionNames = { best_actionable: 'Best actionable', deterministic: 'Deterministic', divination_cards: 'Divination cards', conversions: 'Conversions', bounded_ev: 'Bounded EV', watch_unsupported: 'Watch / unsupported' }
 
 export function ProfitRoutesTab({ categories = [], selectedLeague }) {
-  const [routes, setRoutes] = useState([])
-  const [executions, setExecutions] = useState([])
-  const [readiness, setReadiness] = useState(null)
-  const [historyLoading, setHistoryLoading] = useState(false)
-  const [historyError, setHistoryError] = useState('')
-  const [historyRefresh, setHistoryRefresh] = useState(0)
-  const [category, setCategory] = useState('')
-  const [planner, setPlanner] = useState({ budget: '', horizon: '24', minimumSafeProfit: '', executionBias: '' })
-  const [requestPlan, setRequestPlan] = useState({ budget: '', horizon: '24', minimumSafeProfit: '', executionBias: '' })
-  const [patch, setPatch] = useState({ status: '', reasons: [] })
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
-  useEffect(() => {
-    let cancelled = false
-    if (!selectedLeague) {
-      setRoutes([])
-      setExecutions([])
-      setError('')
-      setLoading(false)
-      return () => { cancelled = true }
-    }
-    setLoading(true)
-    setError('')
-    const params = { league: selectedLeague }
-    if (category) params.category = category
-    if (requestPlan.budget) params.budget_chaos = Number(requestPlan.budget)
-    if (requestPlan.horizon) params.horizon_hours = Number(requestPlan.horizon)
-    if (requestPlan.minimumSafeProfit) params.minimum_safe_profit_chaos = Number(requestPlan.minimumSafeProfit)
-    if (requestPlan.executionBias) params.execution_bias_percent = Number(requestPlan.executionBias)
-    api.get('/profit-routes', { params })
-      .then(({ data }) => {
-        if (cancelled) return
-        setRoutes(Array.isArray(data) ? data : data?.routes || [])
-        setReadiness(data?.deterministic_readiness && typeof data.deterministic_readiness === 'object' ? data.deterministic_readiness : null)
-        setPatch({
-          status: data?.patch_status || '',
-          reasons: Array.isArray(data?.patch_reasons) ? data.patch_reasons : [],
-        })
-      })
-      .catch((err) => { if (!cancelled) setError(err.response?.data?.detail || 'Profit routes unavailable.') })
-      .finally(() => { if (!cancelled) setLoading(false) })
-    return () => { cancelled = true }
-  }, [selectedLeague, category, requestPlan])
-
-  useEffect(() => {
-    let cancelled = false
-    if (!selectedLeague) {
-      setExecutions([])
-      setHistoryError('')
-      setHistoryLoading(false)
-      return () => { cancelled = true }
-    }
-    setHistoryLoading(true)
-    setHistoryError('')
-    api.get('/profit-routes/executions')
-      .then(({ data }) => { if (!cancelled) setExecutions(Array.isArray(data) ? data : data?.executions || []) })
-      .catch((err) => { if (!cancelled) { setExecutions([]); setHistoryError(err.response?.data?.detail || 'Route execution journal unavailable.') } })
-      .finally(() => { if (!cancelled) setHistoryLoading(false) })
-    return () => { cancelled = true }
-  }, [selectedLeague, historyRefresh])
-
-  const refreshHistory = () => setHistoryRefresh((current) => current + 1)
-  const refreshRoutes = () => {
-    refreshHistory()
-    setRequestPlan((current) => ({ ...current }))
-  }
+  const [routes, setRoutes] = useState([]);
+const [sections, setSections] = useState([]);
+const [readiness, setReadiness] = useState(null);
+const [planning, setPlanning] = useState(null)
+  const [executions, setExecutions] = useState([]);
+const [planner, setPlanner] = useState({ amount: '', currency: 'Chaos', horizon: '24', minimumSafeProfit: '', minimumRoi: '', maximumEffort: '', maximumLock: '', executionBias: '', family: '', lifecycle: '', deterministicOnly: false, sort: 'safe_profit_per_active_hour' });
+const [requestPlan, setRequestPlan] = useState({ amount: '', currency: 'Chaos', horizon: '24', minimumSafeProfit: '', minimumRoi: '', maximumEffort: '', maximumLock: '', executionBias: '', family: '', lifecycle: '', deterministicOnly: false, sort: 'safe_profit_per_active_hour' })
+  const [category, setCategory] = useState('');
+const [patch, setPatch] = useState({ status: '', reasons: [] });
+const [loading, setLoading] = useState(false);
+const [error, setError] = useState('');
+const [historyError, setHistoryError] = useState('');
+const [historyLoading, setHistoryLoading] = useState(false);
+const [historyRefresh, setHistoryRefresh] = useState(0)
+  const query = requestPlan || planner
+  useEffect(() => { let cancelled = false;
+if (!selectedLeague) return () => { cancelled = true };
+setLoading(true);
+setError('');
+const params = makeParams(selectedLeague, category, requestPlan)
+    api.get('/profit-routes', { params }).then(({ data }) => { if (cancelled) return;
+setRoutes(Array.isArray(data) ? data : data?.routes || []);
+setSections(Array.isArray(data?.sections) ? data.sections : []);
+setReadiness(data?.deterministic_readiness || null);
+setPlanning(data?.planning || null);
+setPatch({ status: data?.patch_status || '', reasons: Array.isArray(data?.patch_reasons) ? data.patch_reasons : [] }) }).catch((e) => { if (!cancelled) setError(e.response?.data?.detail || 'Profit routes unavailable.') }).finally(() => { if (!cancelled) setLoading(false) });
+return () => { cancelled = true } }, [selectedLeague, category, requestPlan])
+  useEffect(() => { let cancelled = false;
+if (!selectedLeague) { setExecutions([]);
+return () => { cancelled = true } };
+setHistoryLoading(true);
+setHistoryError('');
+api.get('/profit-routes/executions').then(({ data }) => { if (!cancelled) setExecutions(Array.isArray(data) ? data : data?.executions || []) }).catch((e) => { if (!cancelled) { setExecutions([]);
+setHistoryError(e.response?.data?.detail || 'Route execution journal unavailable.') } }).finally(() => { if (!cancelled) setHistoryLoading(false) });
+return () => { cancelled = true } }, [selectedLeague, historyRefresh])
+  const submit = (e) => { e.preventDefault();
+setError('');
+setRequestPlan({ ...planner }) }
+  const refresh = () => { setHistoryRefresh((x) => x + 1);
+setRequestPlan((x) => x ? { ...x } : x) }
+  const grouped = useMemo(() => { const map = new Map();
+for (const route of routes) { const key = route.section || 'unclassified';
+if (!map.has(key)) map.set(key, []);
+map.get(key).push(route) } return map }, [routes])
   return <div className="terminal-page">
-    <div className="page-head"><div><div className="eyebrow">RESEARCH / ROUTES</div><h1>Profit Routes</h1><p className="muted">Routes are shown only when their definitions and market evidence meet the backend’s verification rules. Theoretical routes remain visible when executable liquidity or positive net profit is not verified.</p></div></div>
-    <form className="terminal-panel strategy-form" onSubmit={(event) => { event.preventDefault(); setRequestPlan({ ...planner }) }}><div className="form-row form-row-main"><label className="field"><span>Category</span><select className="input" value={category} onChange={(event) => setCategory(event.target.value)}><option value="">All registered families</option>{categories.filter((item) => item.id === 'DivinationCard').map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label className="field"><span>Budget (Chaos)</span><input className="input numeric" type="number" min="0.000001" step="any" value={planner.budget} onChange={(event) => setPlanner((current) => ({ ...current, budget: event.target.value }))} placeholder="Optional" /></label><label className="field"><span>Horizon (hours)</span><input className="input numeric" type="number" min="0.000001" step="any" value={planner.horizon} onChange={(event) => setPlanner((current) => ({ ...current, horizon: event.target.value }))} /></label><label className="field"><span>Minimum safe profit (Chaos / batch)</span><input className="input numeric" type="number" min="0" step="any" value={planner.minimumSafeProfit} onChange={(event) => setPlanner((current) => ({ ...current, minimumSafeProfit: event.target.value }))} placeholder="Optional" /></label><label className="field"><span>Execution bias (%)</span><input className="input numeric" type="number" min="0" max="99.999999" step="any" value={planner.executionBias} onChange={(event) => setPlanner((current) => ({ ...current, executionBias: event.target.value }))} placeholder="Optional" /></label><button className="btn-primary" type="submit">PLAN ROUTES</button></div><p className="muted small">Provider coverage and evidence status are shown below from the backend registry.</p></form>
-    {!selectedLeague && <div className="terminal-panel"><LeagueEmpty /></div>}
-    {selectedLeague && loading && <div className="terminal-panel"><LoadingState text="Loading profit routes…" /></div>}
-    {selectedLeague && !loading && error && <div className="terminal-panel"><ErrorState message={error} onRetry={() => setRequestPlan({ ...requestPlan })} /></div>}
-    {selectedLeague && !loading && !error && patch.status !== 'resolved' && patch.reasons.length > 0 && <div className="terminal-panel warning-panel"><div className="panel-title"><h2>Patch verification blocked</h2><span>STATUS · {patch.status.toUpperCase()}</span></div><ul className="dense-list">{patch.reasons.map((reason, index) => <li key={index}><span className="signal-mark" />{reason}</li>)}</ul></div>}
-    {selectedLeague && !loading && !error && readiness && <DeterministicReadiness readiness={readiness} />}
-    {selectedLeague && !loading && !error && patch.status === 'resolved' && !routes.length && <div className="terminal-panel"><EmptyState title="No route evidence" message="No registered provider has enough market data to describe a route for this league and category." /></div>}
-    {selectedLeague && !error && routes.length > 0 && <div className="profit-routes">{routes.map((route, index) => <RouteCard key={route.transformation_id || index} route={route} league={selectedLeague} query={{ category, ...requestPlan }} executions={executions} onRefresh={refreshRoutes} onRefreshHistory={refreshHistory} />)}</div>}
-    {selectedLeague && historyLoading && <div className="terminal-panel"><LoadingState text="Loading route execution journal…" /></div>}
-    {selectedLeague && !historyLoading && historyError && <div className="terminal-panel"><ErrorState message={historyError} onRetry={() => setHistoryRefresh((current) => current + 1)} /></div>}
-    {selectedLeague && !historyLoading && !historyError && <ExecutionHistory executions={executions} showIdentity onRefresh={refreshRoutes} />}
+<div className="page-head">
+<div>
+<div className="eyebrow">RESEARCH / ROUTES</div>
+<h1>Profit Routes</h1>
+<p className="muted">Manual, advisory route planning from verified definitions and observed market evidence. No game or trade action is automated.</p>
+</div>
+</div>
+    <form className="terminal-panel strategy-form" onSubmit={submit}>
+<div className="form-row form-row-main">
+<label className="field">
+<span>Category</span>
+<select className="input" value={category} onChange={(e) => setCategory(e.target.value)}>
+<option value="">All registered families</option>{categories.filter((x) => x.id === 'DivinationCard').map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</select>
+</label>
+<label className="field">
+<span>Budget currency</span>
+<select className="input" value={planner.currency} onChange={(e) => setPlanner({ ...planner, currency: e.target.value })}>
+<option>Chaos</option>
+<option>Divine</option>
+</select>
+</label>
+<label className="field">
+<span>Budget amount</span>
+<input className="input numeric" type="number" min="0.000001" step="any" value={planner.amount} onChange={(e) => setPlanner({ ...planner, amount: e.target.value })} placeholder="Optional" />
+</label>
+<label className="field">
+<span>Horizon (hours)</span>
+<input className="input numeric" type="number" min="0.000001" step="any" value={planner.horizon} onChange={(e) => setPlanner({ ...planner, horizon: e.target.value })} />
+</label>
+<label className="field">
+<span>Min safe profit (Chaos)</span>
+<input className="input numeric" type="number" min="0" step="any" value={planner.minimumSafeProfit} onChange={(e) => setPlanner({ ...planner, minimumSafeProfit: e.target.value })} />
+</label>
+<label className="field">
+<span>Min ROI (%)</span>
+<input className="input numeric" type="number" min="0" step="any" value={planner.minimumRoi} onChange={(e) => setPlanner({ ...planner, minimumRoi: e.target.value })} />
+</label>
+<label className="field">
+<span>Max active effort (h)</span>
+<input className="input numeric" type="number" min="0" step="any" value={planner.maximumEffort} onChange={(e) => setPlanner({ ...planner, maximumEffort: e.target.value })} />
+</label>
+<label className="field">
+<span>Max lock time (h)</span>
+<input className="input numeric" type="number" min="0" step="any" value={planner.maximumLock} onChange={(e) => setPlanner({ ...planner, maximumLock: e.target.value })} />
+</label>
+<label className="field">
+<span>Family</span>
+<select className="input" value={planner.family} onChange={(e) => setPlanner({ ...planner, family: e.target.value })}>
+<option value="">All families</option>{Object.entries(familyNames).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>
+</label>
+<label className="field">
+<span>Lifecycle</span>
+<select className="input" value={planner.lifecycle} onChange={(e) => setPlanner({ ...planner, lifecycle: e.target.value })}>
+<option value="">All lifecycle states</option>
+<option value="Validated">Validated</option>
+<option value="Experimental">Experimental</option>
+<option value="Rejected">Rejected</option>
+</select>
+</label>
+<label className="field">
+<span>Sort</span>
+<select className="input" value={planner.sort} onChange={(e) => setPlanner({ ...planner, sort: e.target.value })}>
+<option value="safe_profit_per_active_hour">Safe profit / active hour</option>
+<option value="roi">ROI</option>
+<option value="divine_per_hour">Divine / active hour</option>
+</select>
+</label>
+<label className="field">
+<span>Execution bias (%)</span>
+<input className="input numeric" type="number" min="0" max="99.999999" step="any" value={planner.executionBias} onChange={(e) => setPlanner({ ...planner, executionBias: e.target.value })} />
+</label>
+<label className="field checkbox-field">
+<span>Deterministic only</span>
+<input type="checkbox" checked={planner.deterministicOnly} onChange={(e) => setPlanner({ ...planner, deterministicOnly: e.target.checked })} />
+</label>
+<button className="btn-primary" type="submit">PLAN ROUTES</button>
+</div>
+<p className="muted small">Budget is normalized only through the observed league-scoped Chaos/Divine rate. Divine planning stays disabled with an explicit blocker when that rate is unavailable.</p>
+</form>
+    {!selectedLeague && <div className="terminal-panel">
+<LeagueEmpty />
+</div>}{selectedLeague && loading && <div className="terminal-panel">
+<LoadingState text="Loading profit routes…" />
+</div>}{selectedLeague && !loading && error && <div className="terminal-panel">
+<ErrorState message={error} onRetry={() => setRequestPlan((x) => x ? { ...x } : x)} />
+</div>}
+    {selectedLeague && !loading && !error && planning && <PlanningSummary planning={planning} filters={requestPlan} />}{selectedLeague && !loading && !error && patch.status !== 'resolved' && patch.reasons.length > 0 && <div className="terminal-panel warning-panel">
+<div className="panel-title">
+<h2>Patch verification blocked</h2>
+<span>STATUS · {patch.status.toUpperCase()}</span>
+</div>
+<ul className="dense-list">{patch.reasons.map((x, i) => <li key={i}>
+<span className="signal-mark" />{x}</li>)}</ul>
+</div>}{selectedLeague && !loading && !error && readiness && <DeterministicReadiness readiness={readiness} />}
+    {selectedLeague && !loading && !error && routes.length === 0 && sections.length === 0 && <EmptyState title="WAIT — no actionable route" message={sections.find((x) => x.key === 'watch_unsupported')?.reason || 'No route meets the selected budget, evidence, safety, and filter constraints.'} />}{selectedLeague && !error && (sections.length > 0 || routes.length > 0) && <div className="profit-routes">{(sections.length ? sections : Array.from(grouped.keys()).map((key) => ({ key }))).map((section) => <RouteSection key={section.key} section={section} routes={grouped.get(section.key) || []} league={selectedLeague} query={{ category, ...query }} executions={executions} onRefresh={refresh} onRefreshHistory={() => setHistoryRefresh((x) => x + 1)} />)}</div>}
+    {selectedLeague && historyLoading && <div className="terminal-panel">
+<LoadingState text="Loading route execution journal…" />
+</div>}{selectedLeague && !historyLoading && historyError && <ErrorState message={historyError} onRetry={() => setHistoryRefresh((x) => x + 1)} />}{selectedLeague && !historyLoading && !historyError && <ExecutionHistory executions={executions} showIdentity onRefresh={refresh} />}</div>
+}
+function makeParams(league, category, p) { const params = { league, budget_amount: p.amount ? Number(p.amount) : undefined, budget_currency: p.currency, horizon_hours: Number(p.horizon), category: category || undefined, minimum_safe_profit_chaos: p.minimumSafeProfit ? Number(p.minimumSafeProfit) : undefined, minimum_roi_percent: p.minimumRoi ? Number(p.minimumRoi) : undefined, maximum_active_effort_hours: p.maximumEffort ? Number(p.maximumEffort) : undefined, maximum_lock_time_hours: p.maximumLock ? Number(p.maximumLock) : undefined, family: p.family || undefined, lifecycle: p.lifecycle || undefined, deterministic_only: p.deterministicOnly || undefined, execution_bias_percent: p.executionBias ? Number(p.executionBias) : undefined, sort: p.sort };
+return Object.fromEntries(Object.entries(params).filter(([, v]) => v !== undefined && v !== '')) }
+function PlanningSummary({ planning, filters }) { return <section className="terminal-panel">
+<div className="panel-title">
+<h2>Planning context</h2>
+<span>{planning.normalization_blocker ? 'WAIT' : 'READY'}</span>
+</div>
+<div className="metric-grid">
+<Metric label="Requested budget" value={`${text(planning.requested_amount)} ${planning.requested_currency || ''}`} />
+<Metric label="Budget (Chaos)" value={text(planning.budget_chaos)} />
+<Metric label="Chaos / Divine" value={text(planning.chaos_per_divine)} />
+<Metric label="Rate provenance" value={planning.rate_provenance ? `${text(planning.rate_provenance.source)} · ${text(planning.rate_provenance.observed_at)} · ${text(planning.rate_provenance.observation_type)} · ${text(planning.rate_provenance.confidence_grade)} · max ${text(planning.rate_provenance.max_age_hours)}h` : "—"} />
+</div>{planning.normalization_blocker && <p className="paper-note" role="status">{planning.normalization_blocker}</p>}{planning.applied_filters && <p className="muted small">Applied filters: {text(planning.applied_filters)} · Sort: {filters.sort}</p>}</section> }
+function RouteSection({ section, routes, league, query, executions, onRefresh, onRefreshHistory }) { return <section className="terminal-panel route-section">
+<div className="panel-title">
+<h2>{sectionNames[section.key] || section.label || section.key}</h2>
+<span>{routes.length} route{routes.length === 1 ? '' : 's'}</span>
+</div>{routes.length ? <div className="table-wrap">
+<table className="dense-table">
+<thead>
+<tr>
+<th>Route</th>
+<th>Status</th>
+<th>Safe profit</th>
+<th>ROI</th>
+<th>Active h</th>
+<th>Lock h</th>
+<th>Capacity</th>
+<th>Evidence</th>
+<th />
+</tr>
+</thead>
+<tbody>{routes.map((route, i) => <RouteRow key={route.transformation_id || i} route={route} league={league} query={query} executions={executions} onRefresh={onRefresh} onRefreshHistory={onRefreshHistory} />)}</tbody>
+</table>
+</div> : <p className="muted small">{section.reason || 'No route currently meets this section’s readiness and filter requirements.'}</p>}</section> }
+function RouteRow({ route, league, query, executions, onRefresh, onRefreshHistory }) { const [open, setOpen] = useState(false);
+return <>
+<tr>
+<td>
+<button type="button" className="text-button row-toggle" aria-expanded={open} aria-label={`${open ? 'Collapse' : 'Expand'} ${route.name || 'route'} details`} onClick={() => setOpen((x) => !x)}>{open ? '−' : '+'}</button> <strong>{route.name || route.transformation_id}</strong>
+<small>{route.strategy_family || 'transformation'} · {route.lifecycle || route.status || '—'}</small>
+</td>
+<td>{text(route.status)}</td>
+<td className={Number(route.safe_edge_chaos) < 0 ? 'negative' : ''}>{text(route.safe_edge_chaos)} c</td>
+<td>{percent(route.roi)}</td>
+<td>{text(route.active_execution_time)}</td>
+<td>{text(route.capital_lock_time)}</td>
+<td>{text(route.recommended_capacity ?? route.capacity)} {route.capacity_units || ''}</td>
+<td>{text(route.calibration?.sample_size ?? route.allocator_evidence?.sample_size ?? 0)} samples</td>
+<td>
+<button type="button" className="text-button" onClick={() => setOpen((x) => !x)}>{open ? 'HIDE' : 'DETAIL'}</button>
+</td>
+</tr>{open && <tr className="detail-row">
+<td colSpan="9">
+<RouteDetail route={route} league={league} query={query} executions={executions} onRefresh={onRefresh} onRefreshHistory={onRefreshHistory} />
+</td>
+</tr>}</> }
+function RouteDetail({ route, league, query, executions, onRefresh, onRefreshHistory }) {
+  const calibration = route.calibration || {}
+  const evidence = route.allocator_evidence || {}
+  return <div className="position-detail">
+    <div className="metric-grid">
+      <Metric label="Theoretical / executable / actual net" value={`${text(route.theoretical_net_profit)} / ${text(route.executable_net_profit)} / ${text(route.actual_net_profit)}`} />
+      <Metric label="Safe edge / ROI per lock hour" value={`${text(route.safe_edge_chaos)} c / ${text(route.roi_per_lock_hour)}`} />
+      <Metric label="Batch / binding constraint" value={`${text(route.batch_plan?.set_count)} · ${text(route.batch_plan?.binding_constraint)}`} />
+      <Metric label="Allocator" value={`${evidence.tier || 'WATCH'} · ${evidence.eligible ? 'eligible' : 'not eligible'}`} />
+    </div>
+    <p className="small">Calibration: {calibration.applied ? `applied (${calibration.scope}, ${calibration.sample_size} samples)` : (calibration.fallback_reason || 'baseline unchanged')} · factors {text(calibration.factors)} · adjustments {text(calibration.adjustments_chaos)} · duration factor applies to elapsed lock time;
+planned active effort is unchanged.</p>
+    <p className="small">Safe-edge buffers: {text(route.safe_edge_adjustments)}</p>
+    <div className="route-columns">
+      <DetailList title="Inputs" items={route.inputs} />
+      <DetailList title="Costs" items={route.costs} />
+      <DetailList title="Outputs" items={route.outputs} />
+    </div>
+    <BatchPlan plan={route.batch_plan} />
+    <EvidenceLegs legs={route.evidence_legs} />
+    <p className="muted small">Reasons: {text(route.reasons)} · Provenance: {text(route.source)} · {text(route.verified_version)} · freshness: {text(route.verification_metadata?.quote_timestamps)}</p>
+    <RouteEvidence route={route} league={league} query={query} executions={executions} onRefresh={onRefresh} onRefreshHistory={onRefreshHistory} />
   </div>
 }
-
-function DeterministicReadiness({ readiness }) {
-  const families = readinessFamilies(readiness)
-  const registry = readiness.registry && typeof readiness.registry === 'object' ? readiness.registry : readiness
-  return <section className="terminal-panel" aria-labelledby="deterministic-readiness-heading"><div className="panel-title"><h2 id="deterministic-readiness-heading">Deterministic provider readiness</h2><span>{registry?.version ? `REGISTRY · ${registry.version}` : 'BACKEND STATUS'}</span></div>{(registry?.source || registry?.poe_patch) && <p className="muted small">Source: {registry.source || '—'} · PoE patch: {registry.poe_patch || '—'}</p>}<div className="metric-grid">{Object.entries(familyLabels).map(([key, label]) => { const family = families[key]; if (!family || typeof family !== 'object') return null; const reasons = Array.isArray(family.reasons) ? family.reasons : []; return <div className="metric" key={key}><span>{label}</span><strong>{family.state || '—'}</strong><small>{Number.isFinite(Number(family.accepted_count)) ? `${family.accepted_count} accepted · ${family.rejected_count || 0} rejected` : 'Counts unavailable'}</small>{reasons.length > 0 && <ul className="dense-list">{reasons.map((reason, index) => <li key={index}><span className="signal-mark" />{String(reason)}</li>)}</ul>}</div> })}</div></section>
+function DetailList({ title, items }) {
+  return <section>
+<h3>{title}</h3>{list(items).length ? <ul className="dense-list">{list(items).map((item, index) => <li key={index}>{text(item)}</li>)}</ul> : <p className="muted small">—</p>}</section>
 }
-function RouteCard({ route, league, query, executions, onRefresh, onRefreshHistory }) {
-  const units = route.capacity_units || 'capital'
-  return <article className="terminal-panel profit-route">
-    <div className="panel-title"><div><div className="eyebrow">{route.transformation_id || 'TRANSFORMATION'}</div><h2>{route.name || 'Unnamed route'}</h2></div><span>{route.status ? `STATUS · ${route.status.replaceAll('_', ' ').toUpperCase()}` : (route.source ? `SOURCE · ${route.source}` : 'BACKEND EVALUATION')}</span></div>
-    <div className="metric-group">
-      <h3>Confidence and safe edge</h3>
-      <div className="metric-grid">
-        <Metric label="Certainty" value={route.certainty || '—'} />
-        <Metric label="Liquidity confidence" value={confidenceValue(route.liquidity_confidence)} />
-        <Metric label="Historical confidence" value={confidenceValue(route.historical_confidence)} />
-        <Metric label="Safe edge (Chaos)" value={value(route.safe_edge_chaos)} tone={tone(route.safe_edge_chaos)} />
-        <Metric label="Safe edge (ratio)" value={ratioPercent(route.safe_edge_ratio)} tone={tone(route.safe_edge_ratio)} />
-      </div>
-      <p className="small">Adjustments: {value(route.safe_edge_adjustments)}</p>
-    </div>
-    <div className="metric-group">
-      <h3>Economics</h3>
-      <div className="metric-grid">
-        <Metric label="Status" value={route.status ? route.status.replaceAll('_', ' ') : '—'} />
-        <Metric label="Theoretical net (Chaos)" value={value(route.theoretical_net_profit)} tone={tone(route.theoretical_net_profit)} />
-        <Metric label="Executable net (Chaos)" value={value(route.executable_net_profit)} tone={tone(route.executable_net_profit)} />
-        <Metric label="Actual net (Chaos)" value={value(route.actual_net_profit)} tone={tone(route.actual_net_profit)} />
-        <Metric label="ROI (ratio)" value={ratioPercent(route.roi)} tone={tone(route.roi)} />
-        <Metric label="Theoretical ROI (ratio)" value={ratioPercent(route.theoretical_roi)} />
-        <Metric label="Executable ROI (ratio)" value={ratioPercent(route.executable_roi)} tone={tone(route.executable_roi)} />
-        <Metric label="Capital required (Chaos)" value={value(route.capital_required)} />
-        <Metric label="Profit / active hour (Chaos/h)" value={value(route.profit_per_active_hour)} tone={tone(route.profit_per_active_hour)} />
-        <Metric label="ROI / lock hour (ratio/h)" value={value(route.roi_per_lock_hour)} tone={tone(route.roi_per_lock_hour)} />
-      </div>
-    </div>
-    <div className="metric-group">
-      <h3>Capacity</h3>
-      <div className="metric-grid">
-        <Metric label={`Recommended (${units})`} value={value(route.recommended_capacity ?? route.capacity)} />
-        <Metric label={`Budget (${units})`} value={value(route.budget_capacity)} />
-        <Metric label={`Market (${units})`} value={value(route.market_capacity)} />
-      </div>
-    </div>
-    <div className="metric-group">
-      <h3>Time</h3>
-      <div className="metric-grid">
-        <Metric label="Active execution (hours)" value={value(route.active_execution_time)} />
-        <Metric label="Capital lock / cycle (hours)" value={value(route.capital_lock_time)} />
-      </div>
-    </div>
-    {route.batch_plan && <BatchPlan plan={route.batch_plan} />}
-    <div className="route-columns">
-      <RouteSection title="Inputs" items={route.inputs} /><RouteSection title="Costs" items={route.costs} /><RouteSection title="Outputs" items={route.outputs} />
-      <section><h3>Economics</h3><div className="raw-grid route-raw"><Raw label="Theoretical input cost (Chaos)" item={route.total_input_cost} /><Raw label="Theoretical output value (Chaos)" item={route.realistic_output_value} /><Raw label="Actual net (Chaos)" item={route.actual_net_profit} /></div></section>
-      <section><h3>Confidence / risk</h3><div className="raw-grid route-raw"><Raw label="Overall confidence (0–1)" item={route.confidence} /><Raw label="Pricing confidence (0–1)" item={route.pricing_confidence} /><Raw label="Strategy confidence (0–1)" item={route.strategy_confidence} /><Raw label="Execution risk (0–1)" item={route.execution_risk} /></div></section>
-    </div>
-    <EvidenceLegs legs={route.evidence_legs} />
-    <div className="route-bottom">
-      <section><h3>Reasons</h3>{list(route.reasons).length ? <ul className="dense-list">{list(route.reasons).map((reason, i) => <li key={i}><span className="signal-mark" />{value(reason)}</li>)}</ul> : <p className="muted small">No reasons supplied.</p>}</section>
-      <section><h3>Execution</h3>{route.execution_steps && <p className="small">{value(route.execution_steps)}</p>}<p className="muted small">Recommended capacity: <strong>{value(route.recommended_capacity ?? route.capacity)}</strong> {route.capacity_units ? `(${route.capacity_units})` : ''} · Active execution: <strong>{value(route.active_execution_time)}h</strong> · Capital lock / elapsed cycle: <strong>{value(route.capital_lock_time)}h</strong></p>{route.time_horizon_hours > 0 && <p className="muted small">Time horizon: <strong>{value(route.time_horizon_hours)}h</strong> · Assumptions: {value(route.capacity_assumptions)}</p>}</section>
-    </div>
-    <RouteEvidence route={route} league={league} query={query} executions={executions} onRefresh={onRefresh} onRefreshHistory={onRefreshHistory} />
-    <div className="route-provenance">PROVENANCE · {route.source || '—'} · VERIFIED VERSION · {route.verified_version || '—'}</div>
-  </article>
+function BatchPlan({ plan }) {
+  if (!plan) return <p className="muted small">No executable batch plan;
+read-only route.</p>
+  return <div className="raw-grid route-raw">
+    <Raw label="Budget / sets" item={`${text(plan.budget_chaos)} / ${text(plan.set_count)}`} />
+    <Raw label="Exact inputs" item={plan.exact_cards_to_buy} />
+    <Raw label="Expected outcomes" item={list(plan.expected_outcomes).map((x) => `${x.item || x.market_key}: ${text(x.expected_quantity)}`).join(' · ')} />
+    <Raw label="Cost / revenue / net" item={`${text(plan.executable_cost_chaos)} / ${text(plan.executable_revenue_chaos)} / ${text(plan.executable_net_chaos)} c`} />
+    <Raw label="Effort / lock" item={`${text(plan.active_effort_hours)}h / ${text(plan.lock_time_min_hours)}–${text(plan.lock_time_max_hours)}h`} />
+    <Raw label="Binding constraint" item={plan.binding_constraint} />
+    {list(plan.trade_links).map((link) => <p key={`${link.side}-${link.market_key}`}>
+<a href={link.url} target="_blank" rel="noreferrer">OPEN {String(link.side || '').toUpperCase()} SEARCH · {link.item || link.market_key}</a>
+</p>)}
+  </div>
 }
-function BatchPlan({ plan }) { return <section className="route-bottom"><div><h3>Budget batch plan</h3><div className="raw-grid route-raw"><Raw label="Budget (Chaos)" item={plan.budget_chaos} /><Raw label="Sets" item={plan.set_count} /><Raw label="Exact cards to buy" item={plan.exact_cards_to_buy} /><Raw label="Executable cost (Chaos)" item={plan.executable_cost_chaos} /><Raw label="Executable revenue (Chaos)" item={plan.executable_revenue_chaos} /><Raw label="Executable net (Chaos)" item={plan.executable_net_chaos} /><Raw label="Minimum target sale (Chaos)" item={plan.minimum_target_sale_chaos} /><Raw label="Active effort (hours)" item={plan.active_effort_hours} /><Raw label="Lock range (hours)" item={`${value(plan.lock_time_min_hours)}–${value(plan.lock_time_max_hours)}`} /><Raw label="Binding constraint" item={plan.binding_constraint} /></div></div><div><h3>Expected outcomes / advisory links</h3>{list(plan.expected_outcomes).length ? <ul className="dense-list">{plan.expected_outcomes.map((outcome) => <li key={outcome.market_key}>{outcome.item}: {value(outcome.expected_quantity)} expected · {value(outcome.executable_revenue_chaos)} Chaos · {value(outcome.liquidation_quote_kind)}</li>)}</ul> : <p className="muted small">—</p>}{list(plan.trade_links).map((link) => <p key={`${link.side}-${link.market_key}`}><a href={link.url} target="_blank" rel="noreferrer">OPEN {link.side.toUpperCase()} SEARCH · {link.item}</a></p>)}</div></section> }
-function Metric({ label, value: item, tone }) { return <div className="metric"><span>{label}</span><strong className={tone || ''}>{item}</strong></div> }
-function Raw({ label, item }) { return <div className="raw-row"><span>{label}</span><strong>{value(item)}</strong></div> }
-function RouteSection({ title, items }) { return <section><h3>{title}</h3>{list(items).length ? <ul className="dense-list">{list(items).map((item, i) => <li key={i}>{value(item)}</li>)}</ul> : <p className="muted small">—</p>}</section> }
 function EvidenceLegs({ legs }) {
   const items = list(legs)
-  return <section className="route-bottom"><h3>Evidence legs</h3>{items.length ? <div className="table-wrap"><table className="dense-table"><thead><tr><th>Market key</th><th>Role</th><th>Quote</th><th>Source / observation</th><th>Quote details</th><th>Freshness policy</th><th>Confidence</th><th>Blocker</th></tr></thead><tbody>{items.map((leg, index) => <tr key={`${leg.market_key || 'leg'}-${index}`}><td>{value(leg.market_key)}</td><td>{value(leg.role)}</td><td>{value(leg.quote_side)}</td><td>{value(leg.source)} / {value(leg.observation_type)}</td><td>Kind: {value(leg.quote_kind)} · Grade: {value(leg.confidence_grade)}<br />Observed: {value(leg.observed_at)}<br />Market: {value(leg.market_timestamp)}</td><td>{value(leg.freshness_state)}{leg.max_age_hours != null ? ` · max age policy ${value(leg.max_age_hours)}h` : ''}</td><td>{confidenceValue(leg.confidence)}</td><td>{value(leg.blocker)}</td></tr>)}</tbody></table></div> : <p className="muted small">No evidence legs supplied.</p>}</section>
+  return <details className="progressive">
+<summary>Per-leg provenance ({items.length})</summary>{items.length ? <div className="table-wrap">
+<table className="dense-table">
+<thead>
+<tr>
+<th>Market key</th>
+<th>Role / quote</th>
+<th>Source / observation</th>
+<th>Quote</th>
+<th>Observed / market</th>
+<th>Freshness</th>
+<th>Confidence</th>
+<th>Blocker</th>
+</tr>
+</thead>
+<tbody>{items.map((x, i) => <tr key={i}>
+<td>{text(x.market_key)}</td>
+<td>{text(x.role)} / {text(x.quote_side)}</td>
+<td>{text(x.source)} / {text(x.observation_type)}</td>
+<td>{text(x.quote_kind)} · grade {text(x.confidence_grade)}</td>
+<td>{text(x.observed_at)} / {text(x.market_timestamp)}</td>
+<td>{text(x.freshness_state)}{x.max_age_hours != null ? ` · max ${text(x.max_age_hours)}h` : ''}</td>
+<td>{percent(x.confidence)}</td>
+<td>{text(x.blocker)}</td>
+</tr>)}</tbody>
+</table>
+</div> : <p className="muted small">No evidence legs supplied.</p>}</details>
 }
-function RouteEvidence({ route, league, query, executions, onRefresh, onRefreshHistory }) {
-  const evidence = route.allocator_evidence || {}
-  const [capture, setCapture] = useState({ kind: 'paper', batch: route.batch_plan?.set_count || 1 })
-  const [pending, setPending] = useState(null)
-  const [actuals, setActuals] = useState({ cost: '', revenue: '', duration: '' })
-  const [message, setMessage] = useState('')
-  const plannerParams = {
-    ...(query.category ? { category: query.category } : {}),
-    ...(query.budget ? { budget_chaos: Number(query.budget) } : {}),
-    ...(query.horizon ? { horizon_hours: Number(query.horizon) } : {}),
-    ...(query.minimumSafeProfit ? { minimum_safe_profit_chaos: Number(query.minimumSafeProfit) } : {}),
-    ...(query.executionBias ? { execution_bias_percent: Number(query.executionBias) } : {}),
-  }
-  const updateActual = (name) => (event) => setActuals((current) => ({ ...current, [name]: event.target.value }))
-  async function startCapture(event) {
-    event.preventDefault(); setMessage('')
-    try {
-      const { data } = await api.post('/profit-routes/executions/capture', { league, transformation_id: route.transformation_id, snapshot_id: route.snapshot_id, execution_kind: capture.kind, batch_count: Number(capture.batch), ...plannerParams })
-      setPending(data.execution); onRefreshHistory(); setMessage('Capture recorded. Complete it only after the manual batch is finished.')
-    } catch (err) { setMessage(err.response?.status === 409 ? 'Quotes or route inputs changed. Refresh and review the route before capturing.' : (err.response?.data?.detail || 'Route capture was not recorded.')) }
-  }
-  async function completeCapture(event) {
-    event.preventDefault(); setMessage('')
-    try {
-      await api.post(`/profit-routes/executions/${pending.id}/complete`, { actual_cost_chaos: Number(actuals.cost), actual_revenue_chaos: Number(actuals.revenue), actual_duration_hours: Number(actuals.duration) })
-      setPending(null); setActuals({ cost: '', revenue: '', duration: '' }); setMessage('Completed observation recorded. It now contributes to route evidence.'); onRefresh()
-    } catch (err) { setMessage(err.response?.data?.detail || 'Completed observation was not recorded.') }
-  }
-  return <section className="route-evidence terminal-panel">
-    <div className="panel-title"><h3>Empirical evidence</h3><span>{evidence.tier || 'WATCH'} · {evidence.sample_size ?? 0} samples</span></div>
-    <div className="metric-grid"><Metric label="Allocator tier" value={evidence.tier || 'WATCH'} /><Metric label="Eligible" value={evidence.eligible ? 'YES' : 'NO'} /><Metric label="Observed net / batch (Chaos)" value={value(evidence.actual_net_profit_chaos)} /><Metric label="Observed duration (hours)" value={value(evidence.actual_duration_hours)} /></div>
-    {list(evidence.rejection_reasons).length > 0 && <ul className="dense-list">{list(evidence.rejection_reasons).map((reason, index) => <li key={index}><span className="signal-mark" />{reason}</li>)}</ul>}
-    {route.batch_plan && route.snapshot_id ? <div className="execution-journal">
-      {!pending ? <form onSubmit={startCapture}><p className="muted small">Manual confirmation only. Capture this quoted batch before doing it; no game or trade action is automated.</p><div className="form-row"><label className="field"><span>Execution</span><select className="input" value={capture.kind} onChange={(event) => setCapture((current) => ({ ...current, kind: event.target.value }))}><option value="paper">Paper</option><option value="actual">Actual</option></select></label><label className="field"><span>Complete batches ({route.capacity_units || 'units'})</span><input className="input numeric" type="number" min="1" step="1" value={capture.batch} onChange={(event) => setCapture((current) => ({ ...current, batch: event.target.value }))} /></label><button className="btn-secondary" type="submit">CAPTURE BATCH</button></div></form> : <form onSubmit={completeCapture}><p className="muted small"><strong>Pending capture:</strong> {pending.batch_count} {pending.quantity_unit || route.capacity_units || 'units'} · quoted cost {value(pending.predicted_cost_chaos)} Chaos. Confirm the completed observation below; zero revenue is valid.</p><div className="form-row"><label className="field"><span>Actual total cost (Chaos)</span><input className="input numeric" required min="0.000001" step="any" type="number" value={actuals.cost} onChange={updateActual('cost')} /></label><label className="field"><span>Actual total revenue (Chaos)</span><input className="input numeric" required min="0" step="any" type="number" value={actuals.revenue} onChange={updateActual('revenue')} /></label><label className="field"><span>Actual elapsed hours</span><input className="input numeric" required min="0" step="any" type="number" value={actuals.duration} onChange={updateActual('duration')} /></label><button className="btn-primary" type="submit">CONFIRM COMPLETED RESULT</button></div></form>}
-    </div> : <p className="muted small">No executable captured batch is available; this route remains read-only.</p>}
-    {message && <p className="paper-note" role="status">{message}</p>}
-    <ExecutionHistory executions={(executions || []).filter((item) => item.league === league && (item.transformation_id === route.transformation_id || item.opportunity_id === route.transformation_id))} onRefresh={onRefresh} />
-  </section>
-}
-
-function ExecutionHistory({ executions = [], showIdentity = false, onRefresh }) {
-  return <section className="execution-history"><h4>Recent route observations</h4>{executions.length ? <div className="table-wrap"><table className="dense-table"><thead><tr><th>Status</th><th>Kind</th>{showIdentity && <><th>League</th><th>Route</th></>}<th>Batch</th><th>Actual totals</th><th>Duration</th><th>Recorded</th><th /></tr></thead><tbody>{executions.map((item) => <ExecutionRow key={item.id} item={item} showIdentity={showIdentity} onRefresh={onRefresh} />)}</tbody></table></div> : <p className="muted small">No captured or completed observations.</p>}</section>
-}
-
-function ExecutionRow({ item, showIdentity = false, onRefresh }) {
-  const [editing, setEditing] = useState(false)
-  const [rowError, setRowError] = useState('')
-  const [form, setForm] = useState({ cost: item.actual_cost_chaos ?? '', revenue: item.actual_revenue_chaos ?? '', duration: item.actual_duration_hours ?? '' })
-  const set = (key) => (event) => setForm((current) => ({ ...current, [key]: event.target.value }))
-  async function complete() {
-    setRowError('')
-    try {
-      await api.post(`/profit-routes/executions/${item.id}/complete`, { actual_cost_chaos: Number(form.cost), actual_revenue_chaos: Number(form.revenue), actual_duration_hours: Number(form.duration) })
-      onRefresh()
-    } catch (err) { setRowError(err.response?.data?.detail || 'Completion failed; the pending capture remains open.') }
-  }
-  async function correct() {
-    setRowError('')
-    try {
-      await api.patch(`/profit-routes/executions/${item.id}`, { actual_cost_chaos: Number(form.cost), actual_revenue_chaos: Number(form.revenue), actual_duration_hours: Number(form.duration) })
-      setEditing(false); onRefresh()
-    } catch (err) { setRowError(err.response?.data?.detail || 'Correction failed; the original observation remains unchanged.') }
-  }
-  async function invalidate() {
-    const reason = window.prompt('Why is this observation invalid?')
-    if (!reason?.trim()) return
-    setRowError('')
-    try {
-      await api.post(`/profit-routes/executions/${item.id}/invalidate`, { reason: reason.trim() }); onRefresh()
-    } catch (err) { setRowError(err.response?.data?.detail || 'Invalidation failed; the observation remains unchanged.') }
-  }
-  const pending = item.status === 'pending'
-  const hasActualTotals = item.actual_cost_chaos != null && item.actual_revenue_chaos != null
-  return <tr><td>{item.status || '—'}</td><td>{item.execution_kind || '—'}</td>{showIdentity && <><td>{item.league || '—'}</td><td>{item.opportunity_id || '—'}</td></>}<td>{value(item.batch_count)} {item.quantity_unit || ''}</td><td>{hasActualTotals ? `${value(item.actual_cost_chaos)} → ${value(item.actual_revenue_chaos)} Chaos` : '—'}</td><td>{value(item.actual_duration_hours)}h</td><td>{value(item.completed_at || item.captured_at || item.recorded_at)}</td><td>{pending && <form className="execution-correction" onSubmit={(event) => { event.preventDefault(); complete() }}><input aria-label="Actual total cost" required min="0.000001" step="any" type="number" placeholder="cost" value={form.cost} onChange={set('cost')} /><input aria-label="Actual total revenue" required min="0" step="any" type="number" placeholder="revenue" value={form.revenue} onChange={set('revenue')} /><input aria-label="Actual elapsed hours" required min="0" step="any" type="number" placeholder="hours" value={form.duration} onChange={set('duration')} /><button className="text-button" type="submit">COMPLETE</button></form>}{!item.invalidated_at && (pending || item.status === 'completed') && <><button type="button" className="text-button" onClick={invalidate}>INVALIDATE</button>{item.status === 'completed' && <><button type="button" className="text-button" onClick={() => setEditing((open) => !open)}>CORRECT</button>{editing && <form className="execution-correction" onSubmit={(event) => { event.preventDefault(); correct() }}><input aria-label="Correct actual cost" required min="0.000001" step="any" type="number" value={form.cost} onChange={set('cost')} /><input aria-label="Correct actual revenue" required min="0" step="any" type="number" value={form.revenue} onChange={set('revenue')} /><input aria-label="Correct actual duration" required min="0" step="any" type="number" value={form.duration} onChange={set('duration')} /><button className="text-button" type="submit">SAVE</button></form>}</>}</>}{rowError && <small className="negative" role="alert">{rowError}</small>}</td></tr>
-}
-function confidenceValue(item) { return item == null ? '—' : ratioPercent(item) }
+function RouteEvidence({ route, league, query, executions, onRefresh, onRefreshHistory }) { const [pending, setPending] = useState(null);
+const [kind, setKind] = useState('paper');
+const [actuals, setActuals] = useState({ cost: route.batch_plan?.executable_cost_chaos ?? '', revenue: route.batch_plan?.executable_revenue_chaos ?? '', duration: route.batch_plan?.lock_time_max_hours ?? '' });
+const [message, setMessage] = useState('');
+const [busy, setBusy] = useState(false);
+const planner = { league, transformation_id: route.transformation_id, snapshot_id: route.snapshot_id, execution_kind: kind, batch_count: route.batch_plan.set_count, ...makeParams(league, query.category, query) };
+async function capture(e) { e.preventDefault();
+if (busy) return;
+setBusy(true);
+setMessage('');
+try { const { data } = await api.post('/profit-routes/executions/capture', planner);
+setPending(data.execution);
+setActuals({ cost: data.execution.predicted_cost_chaos ?? '', revenue: data.execution.predicted_revenue_chaos ?? '', duration: data.execution.predicted_duration_hours ?? '' });
+onRefreshHistory();
+setMessage('Captured. Complete only after the manual batch is finished.') } catch (err) { setMessage(err.response?.data?.detail || 'Capture failed.') } finally { setBusy(false) } } async function complete(e) { e.preventDefault();
+try { await api.post(`/profit-routes/executions/${pending.id}/complete`, { actual_cost_chaos: Number(actuals.cost), actual_revenue_chaos: Number(actuals.revenue), actual_duration_hours: Number(actuals.duration) });
+setPending(null);
+setMessage('Completed observation recorded.');
+onRefresh() } catch (err) { setMessage(err.response?.data?.detail || 'Completion failed.') } } if (!route.batch_plan || !route.snapshot_id) return <p className="muted small">No executable captured batch is available;
+this route remains read-only.</p>;
+return <section className="route-evidence">
+<h3>Empirical evidence · {route.allocator_evidence?.tier || 'WATCH'} · {route.allocator_evidence?.sample_size || 0} samples</h3>{!pending ? <form onSubmit={capture}>
+<p className="muted small">Manual confirmation only;
+no game or trade request is sent.</p>
+<div className="form-row">
+<label className="field">
+<span>Execution</span>
+<select className="input" value={kind} onChange={(e) => setKind(e.target.value)}>
+<option value="paper">Paper</option>
+<option value="actual">Actual</option>
+</select>
+</label>
+<label className="field">
+<span>Selected batch ({route.capacity_units || 'units'})</span>
+<strong>{route.batch_plan.set_count}</strong>
+</label>
+<button className="btn-secondary" disabled={busy} type="submit">{busy ? 'CAPTURING…' : 'CAPTURE BATCH'}</button>
+</div>
+</form> : <form onSubmit={complete}>
+<p className="muted small">
+<strong>Pending:</strong> {pending.batch_count} · quoted plan totals prefilled;
+confirm actual result.</p>
+<div className="form-row">
+<label className="field">
+<span>Actual cost (Chaos)</span>
+<input required className="input numeric" type="number" min="0.000001" step="any" value={actuals.cost} onChange={(e) => setActuals({ ...actuals, cost: e.target.value })} />
+</label>
+<label className="field">
+<span>Actual revenue (Chaos)</span>
+<input required className="input numeric" type="number" min="0" step="any" value={actuals.revenue} onChange={(e) => setActuals({ ...actuals, revenue: e.target.value })} />
+</label>
+<label className="field">
+<span>Actual elapsed hours</span>
+<input required className="input numeric" type="number" min="0" step="any" value={actuals.duration} onChange={(e) => setActuals({ ...actuals, duration: e.target.value })} />
+</label>
+<button className="btn-primary" type="submit">CONFIRM COMPLETED RESULT</button>
+</div>
+</form>}{message && <p className="paper-note" role="status">{message}</p>}<ExecutionHistory executions={(executions || []).filter((x) => x.league === league && x.opportunity_id === route.transformation_id && x.route_version === (route.verification_metadata?.registry_version || route.verified_version) && x.poe_patch === route.poe_patch)} onRefresh={onRefresh} />
+</section> }
+function ExecutionHistory({ executions = [], showIdentity = false, onRefresh }) { return <section className="execution-history">
+<h4>Recent route observations</h4>{executions.length ? <div className="table-wrap">
+<table className="dense-table">
+<thead>
+<tr>
+<th>Status</th>
+<th>Kind</th>{showIdentity && <>
+<th>League</th>
+<th>Route</th>
+</>}<th>Batch</th>
+<th>Actual totals</th>
+<th>Duration</th>
+<th>Recorded</th>
+</tr>
+</thead>
+<tbody>{executions.map((x) => <ExecutionRow key={x.id} item={x} showIdentity={showIdentity} onRefresh={onRefresh} />)}</tbody>
+</table>
+</div> : <p className="muted small">No captured or completed observations.</p>}</section> }
+function ExecutionRow({ item, showIdentity = false, onRefresh }) { const [editing, setEditing] = useState(false);
+const [error, setError] = useState('');
+const [form, setForm] = useState({ cost: item.actual_cost_chaos ?? '', revenue: item.actual_revenue_chaos ?? '', duration: item.actual_duration_hours ?? '' });
+const save = async (e) => { e.preventDefault();
+setError('');
+try { await api[editing ? 'patch' : 'post'](`/profit-routes/executions/${item.id}${editing ? '' : '/complete'}`, { actual_cost_chaos: Number(form.cost), actual_revenue_chaos: Number(form.revenue), actual_duration_hours: Number(form.duration) });
+setEditing(false);
+onRefresh() } catch (err) { setError(err.response?.data?.detail || 'Observation update failed.') } };
+const invalidate = async () => { const reason = window.prompt('Why is this observation invalid?');
+if (!reason?.trim()) return;
+setError('');
+try { await api.post(`/profit-routes/executions/${item.id}/invalidate`, { reason: reason.trim() });
+onRefresh() } catch (err) { setError(err.response?.data?.detail || 'Invalidation failed.') } };
+return <tr>
+<td>{item.status || '—'}</td>
+<td>{item.execution_kind || '—'}</td>{showIdentity && <>
+<td>{item.league}</td>
+<td>{item.opportunity_id}</td>
+</>}<td>{text(item.batch_count)} {item.quantity_unit || ''}</td>
+<td>{item.actual_cost_chaos == null ? '—' : `${text(item.actual_cost_chaos)} → ${text(item.actual_revenue_chaos)} c`}</td>
+<td>{text(item.actual_duration_hours)}h</td>
+<td>{text(item.completed_at || item.captured_at)} {item.status === 'pending' && <form className="execution-correction" onSubmit={save}>
+<input aria-label="Actual cost" required type="number" min="0.000001" step="any" value={form.cost} onChange={(e) => setForm({ ...form, cost: e.target.value })} />
+<input aria-label="Actual revenue" required type="number" min="0" step="any" value={form.revenue} onChange={(e) => setForm({ ...form, revenue: e.target.value })} />
+<input aria-label="Actual duration" required type="number" min="0" step="any" value={form.duration} onChange={(e) => setForm({ ...form, duration: e.target.value })} />
+<button className="text-button" type="submit">COMPLETE</button>
+</form>}{!item.invalidated_at && item.status === 'completed' && <>
+<button className="text-button" type="button" onClick={() => setEditing(!editing)}>{editing ? 'HIDE' : 'CORRECT'}</button>
+<button className="text-button" type="button" onClick={invalidate}>INVALIDATE</button>
+</>}{!item.invalidated_at && item.status === 'pending' && <button className="text-button" type="button" onClick={invalidate}>INVALIDATE</button>}{editing && <form className="execution-correction" onSubmit={save}>
+<input aria-label="Correct cost" required type="number" min="0.000001" step="any" value={form.cost} onChange={(e) => setForm({ ...form, cost: e.target.value })} />
+<input aria-label="Correct revenue" required type="number" min="0" step="any" value={form.revenue} onChange={(e) => setForm({ ...form, revenue: e.target.value })} />
+<input aria-label="Correct duration" required type="number" min="0" step="any" value={form.duration} onChange={(e) => setForm({ ...form, duration: e.target.value })} />
+<button className="text-button" type="submit">SAVE</button>
+</form>}{error && <small className="negative" role="alert">{error}</small>}</td>
+</tr> }
+function DeterministicReadiness({ readiness }) { const families = readiness.families || {};
+return <section className="terminal-panel">
+<div className="panel-title">
+<h2>Provider readiness</h2>
+<span>{readiness.registry?.version || 'BACKEND STATUS'}</span>
+</div>
+<div className="metric-grid">{Object.entries(families).map(([key, x]) => <div className="metric" key={key}>
+<span>{familyNames[key] || key}</span>
+<strong>{x.state || '—'}</strong>
+<small>{x.accepted_count ?? 0} accepted · {x.rejected_count ?? 0} rejected</small>{list(x.reasons).map((r, i) => <small key={i}>{r}</small>)}</div>)}</div>
+</section> }
+function Metric({ label, value }) { return <div className="metric">
+<span>{label}</span>
+<strong>{value}</strong>
+</div> };
+function Raw({ label, item }) { return <div className="raw-row">
+<span>{label}</span>
+<strong>{text(item)}</strong>
+</div> }
