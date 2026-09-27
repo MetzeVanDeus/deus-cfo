@@ -1046,10 +1046,12 @@ def _route_snapshot_id(capture: dict) -> str:
 
 
 def _route_from_payload(payload: dict) -> strategies.ProfitRoute:
-    fields = strategies.ProfitRoute.model_fields
-    return strategies.ProfitRoute.model_validate({
-        key: value for key, value in payload.items() if key in fields
-    })
+    values = {
+        key: value for key, value in payload.items()
+        if key in strategies.ProfitRoute.model_fields
+    }
+    values["actual_net_profit"] = None
+    return strategies.ProfitRoute.model_validate(values)
 
 
 def _route_execution_evidence(execution: dict, records: list[dict]) -> dict:

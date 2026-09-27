@@ -564,7 +564,7 @@ async def manual_trade_records(opportunity_id: str | None = None) -> list[dict[s
     """Return unlinked manual observations without mixing them into a portfolio."""
     db = await database.get_db()
     try:
-        query = "SELECT * FROM trade_records WHERE position_id IS NULL"
+        query = "SELECT * FROM trade_records WHERE position_id IS NULL AND route_snapshot_id IS NULL"
         params: tuple[Any, ...] = ()
         if opportunity_id:
             query += " AND opportunity_id = ?"

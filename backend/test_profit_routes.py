@@ -370,6 +370,7 @@ def test_route_capture_completion_correction_and_invalidation_preserve_totals(mo
         assert captured["status"] == "pending"
         assert captured["predicted_cost_chaos"] == 22
         assert strategies.route_allocator_evidence(route, [captured])["sample_size"] == 0
+        assert await portfolio.manual_trade_records() == []
         with pytest.raises(ValueError, match="positive"):
             await portfolio.complete_route_execution(
                 captured["id"],
@@ -446,3 +447,7 @@ def test_route_snapshot_hash_excludes_journal_state():
     before = main._route_snapshot_id(main._route_capture(route, planner))
     assert main._route_snapshot_id(main._route_capture(route, planner)) == before
     assert "allocator_evidence" not in main._route_capture(route, planner)["route"]
+    enriched = route.model_dump(mode="json")
+    enriched["actual_net_profit"] = 7
+    reconstructed = main._route_from_payload(enriched)
+    assert main._route_snapshot_id(main._route_capture(reconstructed, planner)) == before
