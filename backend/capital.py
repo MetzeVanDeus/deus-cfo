@@ -382,7 +382,7 @@ def build_capital_plan(
     category_totals: dict[str, float] = {}
     group_totals: dict[str, float] = {}
     positions: list[AllocationPosition] = []
-    scored: list[tuple[float, InvestableOpportunity]] = []
+    scored: list[tuple[float, int, InvestableOpportunity]] = []
     for item in opportunities:
         if item.status == "INVALIDATED" or item.is_expired(current):
             item.status = "STALE" if item.status != "INVALIDATED" else item.status
@@ -427,8 +427,10 @@ def build_capital_plan(
         downside = max(0.0, -item.downside_percentile / 100)
         risk_scale = {"low": .50, "medium": .75, "high": 1.0}[preferences.risk_tolerance]
         score = max(0.0, item.expected_return / 100) * uncertainty_shrink * risk_scale / max(.25, item.expected_duration)
-        scored.append((score, item))
-    scored.sort(key=lambda entry: entry[0], reverse=True)
+        certainty = str((item.metadata or {}).get("certainty", "STATISTICAL"))
+        certainty_rank = {"STATISTICAL": 0, "BOUNDED_EV": 1, "DETERMINISTIC": 2}.get(certainty, 0)
+        scored.append((score, certainty_rank, item))
+    scored.sort(key=lambda entry: (entry[0], entry[1]), reverse=True)
     if effective_mode == "OBSERVE":
         watchlist.extend(
             _watch_opportunity(
@@ -440,11 +442,11 @@ def build_capital_plan(
                     if calibrations[item.id]["applied"] else item.win_probability
                 ),
             )
-            for _, item in scored
+            for _, _, item in scored
             if item.id not in {watch.opportunity_id for watch in watchlist}
         )
         scored = []
-    for _, item in scored:
+    for _, _, item in scored:
         calibration = calibrations[item.id]
         probability = calibration["calibrated"] if calibration["applied"] else item.win_probability
         confidence_factor = probability if calibration["applied"] else item.confidence
@@ -485,6 +487,11 @@ def build_capital_plan(
         )
         cap *= size_factor
         if _paper_reconstructed(item) and constrained_cap >= item.minimum_capital:
+            cap = max(cap, item.minimum_capital)
+        if (
+            (item.metadata or {}).get("allocator_unit") == "selected_batch_plan"
+            and constrained_cap >= item.minimum_capital
+        ):
             cap = max(cap, item.minimum_capital)
         if cap < item.minimum_capital:
             rejected[item.id] = "risk_adjusted_size_below_minimum"

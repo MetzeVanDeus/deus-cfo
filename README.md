@@ -103,6 +103,8 @@ A route can remain theoretical or be absent when exact prices, buy-side depth, h
 
 Profit Routes preserves evidence for each input, cost, and output leg, including exact market key, quote side, source, timestamps, confidence, freshness policy, and any blocker. The optional minimum safe profit is measured in total Chaos per evaluated batch. The optional execution-bias percentage conservatively raises input fills and lowers output liquidation before budget, capacity, and batch-plan calculations. Known fees, output discounts, conversion friction, cumulative depth, and listing haircuts are reported separately and are not applied twice. Stale quotes hard-block executable capacity instead of receiving an invented numeric penalty; absent route history remains unavailable rather than becoming zero confidence.
 
+Executable routes can be captured before a manual paper or actual execution, then completed later with the observed total Chaos cost, revenue, and elapsed batch duration. The existing journal retains the exact route, league, registry version, patch, quote, planner, quantity unit, and batch size. Pending, corrected, and invalidated records remain visible; only completed, non-invalidated observations with an exact identity match contribute empirical return and duration samples. A changed current quote never rewrites a captured observation, and deterministic mechanics never replace the shared empirical allocator gates.
+
 ## Data trust and supported upstreams
 
 - `web.poecdn.com/api/currency-exchange` is the documented Currency Exchange CDN API used for hourly historical exchange data.

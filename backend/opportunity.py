@@ -104,6 +104,26 @@ class InvestableOpportunity(BaseModel):
         self.status = "INVALIDATED"
         self.rejection_reason = reason
 
+def empirical_tier(
+    *,
+    sample_size: int,
+    historical_confidence: float,
+    liquidity_tier: str,
+    expected_return: float,
+    has_returns: bool,
+) -> tuple[str, str | None]:
+    """Apply the one empirical tier policy shared by every opportunity type."""
+    if not has_returns or sample_size <= 0:
+        return ("WATCH" if expected_return > 0 else "REJECTED", "missing_empirical_distribution")
+    if sample_size >= 100 and historical_confidence >= 0.80 and liquidity_tier == "high" and expected_return > 0:
+        return "S", None
+    if sample_size >= 20 and historical_confidence >= 0.60 and liquidity_tier in {"medium", "high"} and expected_return > 0:
+        return "A", None
+    if expected_return > 0:
+        return ("B", "insufficient_empirical_evidence") if sample_size >= 5 else ("WATCH", "insufficient_empirical_evidence")
+    return "REJECTED", "non_positive_expected_return"
+
+
 def normalize_opportunity(
     opportunity: Opportunity,
     *,
@@ -159,10 +179,12 @@ def normalize_opportunity(
         if "reconstructed" not in str(source)
     )
     reconstructed_dependent = reconstructed_size > 0
-    tier = (
-        "S" if sample_size >= 100 and confidence >= 0.80 and tier_name == "high" and expected_return > 0 and empirical_returns
-        else "A" if sample_size >= 20 and confidence >= 0.60 and tier_name in ("medium", "high") and expected_return > 0 and empirical_returns
-        else "B" if sample_size >= 5 and expected_return > 0 and empirical_returns else "REJECTED"
+    tier, tier_rejection = empirical_tier(
+        sample_size=sample_size,
+        historical_confidence=confidence,
+        liquidity_tier=tier_name,
+        expected_return=expected_return,
+        has_returns=empirical_returns,
     )
     filter_rejection = context.get("filter_rejection")
     paper_reconstructed = (
@@ -178,10 +200,9 @@ def normalize_opportunity(
     )
     if paper_reconstructed:
         tier = "B"
-    if not empirical_returns:
-        tier = "WATCH" if expected_return > 0 else "REJECTED"
     if tier in ("S", "A") and expected_return <= 0:
         tier = "REJECTED"
+        tier_rejection = "non_positive_expected_return"
     if (filter_rejection or (reconstructed_dependent and tier == "B")) and not paper_reconstructed:
         tier = "REJECTED"
     half_life = max(1.0, duration)
@@ -232,9 +253,7 @@ def normalize_opportunity(
                 if reconstructed_dependent else "direct observed snapshots"
             ),
         },
-        rejection_reason=filter_rejection or (
-            None if tier in ("S", "A") else "insufficient_empirical_evidence"
-        ),
+        rejection_reason=filter_rejection or tier_rejection,
     )
 
 
