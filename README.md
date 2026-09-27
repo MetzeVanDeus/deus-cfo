@@ -105,6 +105,10 @@ Profit Routes preserves evidence for each input, cost, and output leg, including
 
 Executable routes can be captured before a manual paper or actual execution, then completed later with the observed total Chaos cost, revenue, and elapsed batch duration. The existing journal retains the exact route, league, registry version, patch, quote, planner, quantity unit, and batch size. Pending, corrected, and invalidated records remain visible; only completed, non-invalidated observations with an exact identity match contribute empirical return and duration samples. A changed current quote never rewrites a captured observation, and deterministic mechanics never replace the shared empirical allocator gates.
 
+Completed route observations now calibrate entry-price premium, exit-price discount, and elapsed lock time with robust medians shrunk toward the unadjusted quote. Two exact-route observations are required because they match the route identity directly; family fallback requires five completed observations from independent peer routes to reduce cross-route noise. League, registry version, and PoE patch boundaries are exact, and equal-strength evidence prefers the exact route. The captured baseline always describes the same final selected batch before empirical calibration, so calibrated snapshots cannot compound their own adjustment. Planned active effort is not treated as observed elapsed time.
+
+The Profit Routes planner accepts Chaos or Divine budgets and converts Divine only from a direct league observation no older than 24 hours, with source and timestamp shown in the UI. Backend filters cover safe profit, ROI, planned effort, elapsed lock time, family, lifecycle, and deterministic certainty. Backend-defined sections retain explicit empty/readiness reasons, and ranking can use confidence-adjusted safe profit per active hour, ROI, or actual Divine profit per active hour.
+
 ## Data trust and supported upstreams
 
 - `web.poecdn.com/api/currency-exchange` is the documented Currency Exchange CDN API used for hourly historical exchange data.

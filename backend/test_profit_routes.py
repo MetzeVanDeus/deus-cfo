@@ -87,6 +87,32 @@ def test_profit_route_calculation_preserves_price_provenance():
         },
     }
 
+def test_primary_transformation_provider_applies_route_calibration_and_lifecycle():
+    rows = {
+        item: _record(item, price)
+        for item, price in (("A", 10), ("Chaos", 1), ("B", 40), ("C", 4))
+    }
+    prices = {f"Currency:{item}": row for item, row in rows.items()}
+    records = [
+        _calibration_record(
+            route_id="test-route", family="test", entry=1.2, exit=.8,
+            duration=1.5, patch=None,
+        )
+        for _ in range(3)
+    ]
+    route = TransformationStrategyProvider(_registry()).evaluate({
+        "league": "Test", "prices": prices, "price_records": prices,
+        "route_execution_records": records,
+    })[0]
+    assert route.calibration["scope"] == "exact_route"
+    assert route.calibration["baseline"]["batch_count"] == 1
+    assert route.total_input_cost > route.calibration["baseline"]["cost_chaos"]
+    assert route.realistic_output_value < 30
+    assert route.capital_lock_time > 3
+    assert route.active_execution_time == 2
+    assert route.verification_metadata["strategy_lifecycle"] == "Validated"
+
+
 def test_profit_routes_api_uses_latest_market_rows(monkeypatch):
     rows = {
         "Currency": [_record("Divine", 100), _record("Chaos", 1), _record("A", 10),
@@ -99,7 +125,10 @@ def test_profit_routes_api_uses_latest_market_rows(monkeypatch):
     monkeypatch.setattr(main.market_data, "get_all_latest", latest)
     monkeypatch.setattr(main.strategies, "default_transformation_registry", _registry)
     response = asyncio.run(main.get_profit_routes("Test", category="Currency"))
-    assert set(response) == {"league", "category", "poe_patch", "patch_status", "patch_reasons", "deterministic_readiness", "routes"}
+    assert set(response) == {
+        "league", "category", "poe_patch", "patch_status", "patch_reasons",
+        "planning", "deterministic_readiness", "sections", "routes",
+    }
     assert response["league"] == "Test"
     assert response["category"] == "Currency"
     assert response["routes"][0]["transformation_id"] == "test-route"
@@ -108,6 +137,82 @@ def test_profit_routes_api_uses_latest_market_rows(monkeypatch):
     assert response["deterministic_readiness"]["families"]["assembly"]["state"] == "unsupported_empty"
     assert response["deterministic_readiness"]["families"]["vendor"]["accepted_count"] == 0
     assert response["routes"][0]["execution_steps"] == []
+
+
+def test_profit_routes_normalizes_divine_budget_and_fails_closed_without_rate(monkeypatch):
+    rows = {"Currency": [_record("Divine", 100)]}
+
+    async def latest(_league):
+        return rows
+
+    async def no_records(*_args, **_kwargs):
+        return []
+
+    monkeypatch.setattr(main.market_data, "get_all_latest", latest)
+    monkeypatch.setattr(main.portfolio, "route_execution_records", no_records)
+    converted = asyncio.run(main.get_profit_routes(
+        "Test", category="Currency", budget_amount=2, budget_currency="Divine",
+    ))
+    assert converted["planning"]["budget_chaos"] == 200
+    assert converted["planning"]["rate_provenance"]["source"] == "test-market"
+    assert converted["planning"]["rate_provenance"]["max_age_hours"] == 24
+
+    rows["Currency"][0]["observed_at"] = "2000-01-01T00:00:00+00:00"
+    blocked = asyncio.run(main.get_profit_routes(
+        "Test", category="Currency", budget_amount=2, budget_currency="Divine",
+    ))
+    assert blocked["planning"]["budget_chaos"] is None
+    assert "older than 24 hours" in blocked["planning"]["normalization_blocker"]
+    best = next(section for section in blocked["sections"] if section["key"] == "best_actionable")
+    assert best["reason"].startswith("WAIT:")
+
+
+def test_profit_routes_backend_filters_ranks_and_sections(monkeypatch):
+    async def latest(_league):
+        return {"Currency": [_record("Divine", 100)]}
+
+    async def no_records(*_args, **_kwargs):
+        return []
+
+    first = _phase4_route()
+    first.confidence = .8
+    second_plan = first.batch_plan.model_copy(update={
+        "executable_revenue_chaos": 23,
+        "executable_net_chaos": 1,
+    })
+    second = first.model_copy(update={
+        "transformation_id": "route-b", "name": "Route B",
+        "safe_edge_chaos": 1, "safe_edge_ratio": .1,
+        "roi_per_lock_hour": .05, "confidence": .5,
+        "batch_plan": second_plan,
+    })
+
+    class EmptyDeferred:
+        def evaluate(self, _context):
+            return []
+
+        def readiness(self, _context, *, routes):
+            return {"families": {}}
+
+    monkeypatch.setattr(main.market_data, "get_all_latest", latest)
+    monkeypatch.setattr(main.portfolio, "route_execution_records", no_records)
+    monkeypatch.setattr(
+        main.strategies.TransformationStrategyProvider,
+        "evaluate",
+        lambda _self, _context: [second, first],
+    )
+    monkeypatch.setattr(main.strategies, "default_deferred_strategy_provider", EmptyDeferred)
+    response = asyncio.run(main.get_profit_routes(
+        "Test", category="Currency", minimum_roi_percent=15,
+        family="deterministic", lifecycle="Experimental",
+        deterministic_only=True, sort="safe_profit_per_active_hour",
+    ))
+    assert [route["transformation_id"] for route in response["routes"]] == ["route-a"]
+    route = response["routes"][0]
+    assert route["section"] == "best_actionable"
+    assert route["ranking"]["safe_profit_per_active_hour"] == pytest.approx(4.8)
+    assert route["ranking"]["divine_per_hour"] == pytest.approx(.06)
+    assert response["planning"]["applied_filters"]["minimum_roi_percent"] == 15
 
 
 def test_capital_plan_keeps_theoretical_candidate_without_exact_execution_depth(monkeypatch, tmp_path):
@@ -278,6 +383,122 @@ def _completed_route_record(*, profit=2, version="v1", league="Test", invalid=Fa
     }
 
 
+def _calibration_record(
+    route_id="route-a", family="deterministic_test", *, entry=1.2, exit=.8,
+    duration=1.5, league="Test", version="v1", patch="3.29",
+):
+    return {
+        "status": "completed", "opportunity_id": route_id, "league": league,
+        "route_version": version, "poe_patch": patch,
+        "actual_cost_chaos": 10 * entry, "actual_revenue_chaos": 20 * exit,
+        "actual_duration_hours": 2 * duration,
+        "predicted_cost_chaos": 11, "predicted_revenue_chaos": 18,
+        "predicted_duration_hours": 3,
+        "route_snapshot": {"route": {
+            "transformation_id": route_id,
+            "strategy_family": family,
+            "calibration": {
+                "applied": True,
+                "factors": {"entry": 1.1, "exit": .9, "duration": 1.5},
+                "baseline": {
+                    "batch_count": 1, "cost_chaos": 10,
+                    "revenue_chaos": 20, "lock_time_hours": 2,
+                },
+            },
+        }},
+    }
+
+
+def test_route_execution_calibration_is_robust_bounded_and_non_compounding():
+    records = [
+        _calibration_record(entry=1.2, exit=.8, duration=1.5),
+        _calibration_record(entry=1.2, exit=.8, duration=1.5),
+        _calibration_record(entry=10, exit=.1, duration=20),
+        _calibration_record(league="Other"),
+        _calibration_record(version="v2"),
+        _calibration_record(patch="3.30"),
+    ]
+    calibration = strategies.route_execution_calibration(
+        route_id="route-a", strategy_family="deterministic_test",
+        league="Test", route_version_value="v1", poe_patch="3.29",
+        records=records,
+    )
+    assert calibration["scope"] == "exact_route"
+    assert calibration["sample_size"] == 3
+    assert calibration["observed_medians"] == pytest.approx(
+        {"entry": 1.2, "exit": .8, "duration": 1.5}
+    )
+    assert calibration["factors"] == pytest.approx(
+        {"entry": 1.1, "exit": .9, "duration": 1.25}
+    )
+
+
+def test_route_execution_calibration_uses_independent_family_strength_and_exact_tie():
+    exact = [_calibration_record() for _ in range(2)]
+    peers = [_calibration_record(route_id=f"peer-{index}", entry=1.4) for index in range(5)]
+    family = strategies.route_execution_calibration(
+        route_id="route-a", strategy_family="deterministic_test",
+        league="Test", route_version_value="v1", poe_patch="3.29",
+        records=[*exact, *peers],
+    )
+    assert family["scope"] == "strategy_family"
+    assert family["family_sample_size"] == 5
+    tied = strategies.route_execution_calibration(
+        route_id="route-a", strategy_family="deterministic_test",
+        league="Test", route_version_value="v1", poe_patch="3.29",
+        records=[*[_calibration_record() for _ in range(5)], *peers],
+    )
+    assert tied["scope"] == "exact_route"
+    sparse = strategies.route_execution_calibration(
+        route_id="route-a", strategy_family="deterministic_test",
+        league="Test", route_version_value="v1", poe_patch="3.29",
+        records=[_calibration_record()],
+    )
+    assert sparse["applied"] is False
+    assert "needs 2 completed" in sparse["fallback_reason"]
+
+
+def test_calibration_factors_reduce_batch_economics_before_budget_and_horizon():
+    ladder = strategies.evaluate_deterministic_batch_ladder(
+        inputs=[{"quantity": 1}], conversion_costs=[], outputs=[{"quantity": 1}],
+        input_quotes=[{"levels": [{"price": 10, "quantity": 2}], "fee": 0}],
+        cost_quotes=[],
+        output_quotes=[{"levels": [{"price": 20, "quantity": 2}], "fee": 0}],
+        max_batch=2, budget_chaos=22, time_horizon_hours=3,
+        capital_lock_time=2.5, entry_calibration_factor=1.1,
+        exit_calibration_factor=.8,
+    )
+    assert len(ladder) == 1
+    assert ladder[0]["baseline_cost_chaos"] == 10
+    assert ladder[0]["baseline_revenue_chaos"] == 20
+    assert ladder[0]["input_cost_chaos"] == pytest.approx(11)
+    assert ladder[0]["executable_output_chaos"] == pytest.approx(16)
+    assert ladder[0]["safe_net_chaos"] == pytest.approx(5)
+
+    reconciled = strategies.evaluate_deterministic_batch_ladder(
+        inputs=[{"quantity": 1}], conversion_costs=[], outputs=[{"quantity": 1}],
+        input_quotes=[{"levels": [{"price": 10, "quantity": 1}], "fee": .1}],
+        cost_quotes=[],
+        output_quotes=[{"levels": [{"price": 30, "quantity": 1}], "fee": .1}],
+        max_batch=1, budget_chaos=0, time_horizon_hours=3,
+        capital_lock_time=1, sale_fee_rate=.1, output_discount_rate=.1,
+        friction_chaos=1, execution_bias_rate=.05,
+        entry_calibration_factor=1.1, exit_calibration_factor=.9,
+    )[0]
+    adjustments = reconciled["adjustments"]
+    rebuilt_net = (
+        adjustments["raw_output_fill_chaos"]
+        - adjustments["raw_input_fill_chaos"]
+        - adjustments["explicit_fees_chaos"]
+        - adjustments["execution_bias_chaos"]
+        - adjustments["friction_chaos"]
+        - adjustments["output_discount_chaos"]
+        - adjustments["calibration_entry_chaos"]
+        - adjustments["calibration_exit_chaos"]
+    )
+    assert rebuilt_net == pytest.approx(reconciled["safe_net_chaos"])
+
+
 def test_route_evidence_uses_exact_completed_identity_and_preserves_observed_zero():
     route = _phase4_route()
     evidence = strategies.route_allocator_evidence(route, [
@@ -439,10 +660,18 @@ def test_route_snapshot_hash_excludes_journal_state():
     planner = main._route_planner_capture(
         league="Test",
         category=None,
-        budget_chaos=25,
+        budget_amount=25,
+        budget_currency="Chaos",
         horizon_hours=24,
         minimum_safe_profit_chaos=1,
         execution_bias_percent=2,
+        minimum_roi_percent=None,
+        maximum_active_effort_hours=None,
+        maximum_lock_time_hours=None,
+        family=None,
+        lifecycle=None,
+        deterministic_only=False,
+        sort="safe_profit_per_active_hour",
     )
     before = main._route_snapshot_id(main._route_capture(route, planner))
     assert main._route_snapshot_id(main._route_capture(route, planner)) == before

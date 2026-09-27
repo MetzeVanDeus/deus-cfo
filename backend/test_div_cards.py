@@ -392,7 +392,7 @@ def test_budgeted_route_returns_reconciled_manual_batch_plan(monkeypatch):
     result = asyncio.run(main.get_profit_routes(
         "Test",
         category="DivinationCard",
-        budget_chaos=50,
+        budget_amount=50,
         horizon_hours=24,
     ))
     plan = result["routes"][0]["batch_plan"]
@@ -417,7 +417,7 @@ def test_budgeted_route_returns_reconciled_manual_batch_plan(monkeypatch):
     buffered = asyncio.run(main.get_profit_routes(
         "Test",
         category="DivinationCard",
-        budget_chaos=50,
+        budget_amount=50,
         horizon_hours=24,
         minimum_safe_profit_chaos=3,
         execution_bias_percent=10,
@@ -430,8 +430,8 @@ def test_budgeted_route_returns_reconciled_manual_batch_plan(monkeypatch):
 
 
 @pytest.mark.parametrize(("name", "value"), [
-    ("budget_chaos", 0),
-    ("budget_chaos", float("inf")),
+    ("budget_amount", 0),
+    ("budget_amount", float("inf")),
     ("horizon_hours", -1),
     ("horizon_hours", float("nan")),
 ])
@@ -1048,6 +1048,26 @@ def test_execution_bias_reconciles_route_and_batch_plan():
     assert route.batch_plan.executable_net_chaos == pytest.approx(route.safe_edge_chaos)
     assert route.safe_edge_adjustments["explicit_fees_chaos"] == pytest.approx(1.75)
     assert route.safe_edge_adjustments["execution_bias_chaos"] == pytest.approx(5.725)
+
+    ladder = strategies.evaluate_batch_ladder(
+        set_size=1,
+        outcomes=[{"reward_quantity": 1, "probability": 1}],
+        buy_quote={"levels": [{"price": 10, "quantity": 1}], "fee": .1},
+        sell_quotes=[{"levels": [{"price": 30, "quantity": 1}], "fee": .1}],
+        max_batch=1, budget_chaos=0, time_horizon_hours=2,
+        capital_lock_time=1, sale_fee_rate=.1, execution_bias_rate=.05,
+        entry_calibration_factor=1.1, exit_calibration_factor=.9,
+    )[0]
+    adjustments = ladder["adjustments"]
+    rebuilt_net = (
+        adjustments["raw_output_fill_chaos"]
+        - adjustments["raw_input_fill_chaos"]
+        - adjustments["explicit_fees_chaos"]
+        - adjustments["execution_bias_chaos"]
+        - adjustments["calibration_entry_chaos"]
+        - adjustments["calibration_exit_chaos"]
+    )
+    assert rebuilt_net == pytest.approx(ladder["safe_net_chaos"])
 
 
 def test_minimum_safe_profit_keeps_ladder_until_larger_batch_passes():
