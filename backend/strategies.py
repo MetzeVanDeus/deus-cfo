@@ -2383,6 +2383,7 @@ def _deferred_route(
     *,
     route_id: str | None = None,
     name: str | None = None,
+    strategy_family: str | None = None,
     inputs: Sequence[Mapping[str, Any]] | None = None,
     outputs: Sequence[Mapping[str, Any]] | None = None,
     conversion_costs: Sequence[Mapping[str, Any]] | None = None,
@@ -2418,7 +2419,7 @@ def _deferred_route(
     capital_lock_time = float(record.get("lock_time_hours", active_time + float(record.get("expected_sale_time_hours", 0))))
     capital_lock_time = max(0.25, capital_lock_time)
     final_route_id = str(route_id or record["id"])
-    family = str(record.get("strategy_family", "deterministic"))
+    family = str(strategy_family or record.get("strategy_family", "deterministic"))
     calibration = route_execution_calibration(
         route_id=final_route_id,
         strategy_family=family,
@@ -2650,11 +2651,11 @@ class AssemblyStrategyProvider:
                 route = _deferred_route(
                     record, context,
                     route_id=record["id"] if direction == "assemble" else f"{record['id']}:disassemble",
+                    strategy_family="deterministic_assembly",
                     name=record["name"] if direction == "assemble" else f"{record['name']} (disassembly)",
                     inputs=inputs, outputs=outputs,
                 )
                 if route:
-                    route.strategy_family = "deterministic_assembly"
                     route.verification_metadata["direction"] = direction
                     if direction == "assemble":
                         route.reasons.append(
@@ -2688,9 +2689,10 @@ class VendorTransformationStrategyProvider:
                 continue
             if record["status"] in {StrategyLifecycle.REJECTED.value, StrategyLifecycle.DEPRECATED.value}:
                 continue
-            route = _deferred_route(context=context, record=record)
+            route = _deferred_route(
+                context=context, record=record, strategy_family="vendor_transformation",
+            )
             if route:
-                route.strategy_family = "vendor_transformation"
                 routes.append(route)
         return routes
 
@@ -2824,12 +2826,13 @@ class DeterministicSixLinkStrategyProvider:
                 continue
             if record["status"] in {StrategyLifecycle.REJECTED.value, StrategyLifecycle.DEPRECATED.value}:
                 continue
-            route = _deferred_route(context=context, record=record)
+            route = _deferred_route(
+                context=context, record=record, strategy_family="deterministic_six_link",
+            )
             if route:
                 route.status = "manual_only"
                 route.execution_risk = max(route.execution_risk, 1.0)
                 route.reasons.append("manual-only six-link strategy; automatic allocation is disabled")
-                route.strategy_family = "deterministic_six_link"
                 route.category = record.get("category", "SixLink")
                 route.verification_metadata["linking_method"] = record["linking_method"]
                 routes.append(route)

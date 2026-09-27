@@ -93,11 +93,11 @@ map.get(key).push(route) } return map }, [routes])
 </label>
 <label className="field">
 <span>Max active effort (h)</span>
-<input className="input numeric" type="number" min="0" step="any" value={planner.maximumEffort} onChange={(e) => setPlanner({ ...planner, maximumEffort: e.target.value })} />
+<input className="input numeric" type="number" min="0.000001" step="any" value={planner.maximumEffort} onChange={(e) => setPlanner({ ...planner, maximumEffort: e.target.value })} />
 </label>
 <label className="field">
 <span>Max lock time (h)</span>
-<input className="input numeric" type="number" min="0" step="any" value={planner.maximumLock} onChange={(e) => setPlanner({ ...planner, maximumLock: e.target.value })} />
+<input className="input numeric" type="number" min="0.000001" step="any" value={planner.maximumLock} onChange={(e) => setPlanner({ ...planner, maximumLock: e.target.value })} />
 </label>
 <label className="field">
 <span>Family</span>
@@ -153,7 +153,7 @@ map.get(key).push(route) } return map }, [routes])
 <LoadingState text="Loading route execution journal…" />
 </div>}{selectedLeague && !historyLoading && historyError && <ErrorState message={historyError} onRetry={() => setHistoryRefresh((x) => x + 1)} />}{selectedLeague && !historyLoading && !historyError && <ExecutionHistory executions={executions} showIdentity onRefresh={refresh} />}</div>
 }
-function makeParams(league, category, p) { const params = { league, budget_amount: p.amount ? Number(p.amount) : undefined, budget_currency: p.currency, horizon_hours: Number(p.horizon), category: category || undefined, minimum_safe_profit_chaos: p.minimumSafeProfit ? Number(p.minimumSafeProfit) : undefined, minimum_roi_percent: p.minimumRoi ? Number(p.minimumRoi) : undefined, maximum_active_effort_hours: p.maximumEffort ? Number(p.maximumEffort) : undefined, maximum_lock_time_hours: p.maximumLock ? Number(p.maximumLock) : undefined, family: p.family || undefined, lifecycle: p.lifecycle || undefined, deterministic_only: p.deterministicOnly || undefined, execution_bias_percent: p.executionBias ? Number(p.executionBias) : undefined, sort: p.sort };
+function makeParams(league, category, p) { const params = { league, budget_amount: p.amount ? Number(p.amount) : undefined, budget_currency: p.currency, horizon_hours: p.horizon ? Number(p.horizon) : undefined, category: category || undefined, minimum_safe_profit_chaos: p.minimumSafeProfit ? Number(p.minimumSafeProfit) : undefined, minimum_roi_percent: p.minimumRoi ? Number(p.minimumRoi) : undefined, maximum_active_effort_hours: p.maximumEffort ? Number(p.maximumEffort) : undefined, maximum_lock_time_hours: p.maximumLock ? Number(p.maximumLock) : undefined, family: p.family || undefined, lifecycle: p.lifecycle || undefined, deterministic_only: p.deterministicOnly || undefined, execution_bias_percent: p.executionBias ? Number(p.executionBias) : undefined, sort: p.sort };
 return Object.fromEntries(Object.entries(params).filter(([, v]) => v !== undefined && v !== '')) }
 function PlanningSummary({ planning, filters }) { return <section className="terminal-panel">
 <div className="panel-title">
@@ -288,7 +288,7 @@ const [kind, setKind] = useState('paper');
 const [actuals, setActuals] = useState({ cost: route.batch_plan?.executable_cost_chaos ?? '', revenue: route.batch_plan?.executable_revenue_chaos ?? '', duration: route.batch_plan?.lock_time_max_hours ?? '' });
 const [message, setMessage] = useState('');
 const [busy, setBusy] = useState(false);
-const planner = { league, transformation_id: route.transformation_id, snapshot_id: route.snapshot_id, execution_kind: kind, batch_count: route.batch_plan.set_count, ...makeParams(league, query.category, query) };
+const planner = { league, transformation_id: route.transformation_id, snapshot_id: route.snapshot_id, execution_kind: kind, batch_count: route.batch_plan?.set_count, ...makeParams(league, query.category, query) };
 async function capture(e) { e.preventDefault();
 if (busy) return;
 setBusy(true);

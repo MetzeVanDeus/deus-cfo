@@ -14,6 +14,7 @@ from strategies import (
     DeterministicSixLinkStrategyProvider,
     SixLinkRegistry,
     VendorTransformationRegistry,
+    VendorTransformationStrategyProvider,
 )
 
 
@@ -81,6 +82,36 @@ def test_assembly_checks_both_directions_and_full_friction_cost():
     assert assembly.total_input_cost == pytest.approx(6.5)
     assert assembly.expected_net_profit == pytest.approx(13.5)
     assert assembly.verification_metadata["market_keys"] == ["Fragment:Part", "Fragment:Whole"]
+
+
+def test_vendor_family_calibration_matches_captured_provider_identity():
+    registry = VendorTransformationRegistry([vendor_record("a-to-b", "A", "B")])
+    records = [
+        {
+            "status": "completed",
+            "opportunity_id": f"peer-{index}",
+            "league": "Test",
+            "route_version": "3.29.0-1",
+            "poe_patch": None,
+            "actual_cost_chaos": 11,
+            "actual_revenue_chaos": 18,
+            "actual_duration_hours": 3,
+            "route_snapshot": {"route": {
+                "transformation_id": f"peer-{index}",
+                "strategy_family": "vendor_transformation",
+                "calibration": {"baseline": {
+                    "cost_chaos": 10, "revenue_chaos": 20, "lock_time_hours": 2,
+                }},
+            }},
+        }
+        for index in range(5)
+    ]
+    market = context(("Currency:A", 10, "A"), ("Currency:B", 20, "A"))
+    market["route_execution_records"] = records
+    route = VendorTransformationStrategyProvider(registry).evaluate(market)[0]
+    assert route.strategy_family == "vendor_transformation"
+    assert route.calibration["scope"] == "strategy_family"
+    assert route.calibration["family_sample_size"] == 5
 
 
 def test_vendor_graph_is_bounded_and_loop_free_with_all_edge_costs():
