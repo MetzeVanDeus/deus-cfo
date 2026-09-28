@@ -44,8 +44,15 @@ setHistoryError('');
 api.get('/profit-routes/executions').then(({ data }) => { if (!cancelled) setExecutions(Array.isArray(data) ? data : data?.executions || []) }).catch((e) => { if (!cancelled) { setExecutions([]);
 setHistoryError(e.response?.data?.detail || 'Route execution journal unavailable.') } }).finally(() => { if (!cancelled) setHistoryLoading(false) });
 return () => { cancelled = true } }, [selectedLeague, historyRefresh])
+  // New filters make previous results stale; an in-place refresh keeps them visible.
+  const clearResults = () => { setRoutes([]);
+setSections([]);
+setReadiness(null);
+setPlanning(null);
+setPatch({ status: '', reasons: [] }) }
   const submit = (e) => { e.preventDefault();
 setError('');
+clearResults();
 setRequestPlan({ ...planner }) }
   const refresh = () => { setHistoryRefresh((x) => x + 1);
 setRequestPlan((x) => x ? { ...x } : x) }
@@ -65,7 +72,8 @@ map.get(key).push(route) } return map }, [routes])
 <div className="form-row form-row-main">
 <label className="field">
 <span>Category</span>
-<select className="input" value={category} onChange={(e) => setCategory(e.target.value)}>
+<select className="input" value={category} onChange={(e) => { clearResults();
+setCategory(e.target.value) }}>
 <option value="">All registered families</option>{categories.filter((x) => x.id === 'DivinationCard').map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</select>
 </label>
 <label className="field">
