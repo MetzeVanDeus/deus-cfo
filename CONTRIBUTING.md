@@ -8,7 +8,7 @@ DeusCFO is a local, evidence-first Path of Exile research terminal. Contribution
 2. Run the explicit development launcher with `python deuscfo.py dev`, or start the API and Vite separately.
 3. Keep runtime databases, captures, local config, and frontend build output out of commits.
 
-Before opening a pull request, run the focused tests for the area changed and the existing frontend checks. Do not include real account credentials, private-league data, or raw captures containing personal information.
+Before opening a pull request, run the focused tests for the area changed and the existing frontend checks. `npm test --prefix frontend` runs the helper tests and the Vitest component tests in `frontend/tests/components/`, which pin UI honesty contracts: WAIT and blocker states, `—` for unknown values, and dropping results after a league or filter change. UI changes that affect those contracts need a matching component test. Do not include real account credentials, private-league data, or raw captures containing personal information.
 
 ## Data and strategies
 

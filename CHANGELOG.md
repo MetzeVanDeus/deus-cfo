@@ -1,6 +1,20 @@
 # Changelog
 ## Unreleased
 
+## 0.9.1 — 2026-09-28
+
+### Added
+
+- Added Vitest component tests for UI honesty contracts: first-run and WAIT readiness states, `—` for unknown Explorer price changes, Profit Routes WAIT, normalization and patch blockers, and discarding results and late responses after a shared-league change. `npm test` now runs them in CI.
+
+### Fixed
+
+- Stopped Profit Routes from showing results for the previous filters or category while a new plan is loading.
+
+### Release
+
+- Released patch `0.9.1` with frontend component tests and the Profit Routes stale-result fix.
+
 ## 0.9.0 — 2026-09-27
 
 ### Added
