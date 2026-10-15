@@ -7,6 +7,7 @@
 - Preserved the route's Experimental lifecycle in allocator candidates and its existing 2% bankroll cap, without splitting an indivisible selected batch or widening allocation policy.
 - Distinguished insufficient liquidity from insufficient empirical samples while preserving shared tier thresholds, exact completed-history identity, freshness, patch, and executable-depth gates. Added an isolated HTTP/temp-database regression with explicitly controlled paper fixtures, not live profit claims.
 - Removed vulnerable Tailwind 3 transitive dependencies by migrating to the supported Tailwind 4 PostCSS plugin while retaining the terminal theme and compatible reset defaults; refreshed patched brace-expansion and source-map-js releases without audit overrides.
+- Kept narrow-screen league status within the header and route tables within their own horizontal scroll area instead of widening the page.
 
 ### Release
 
