@@ -119,6 +119,8 @@ def empirical_tier(
         return "S", None
     if sample_size >= 20 and historical_confidence >= 0.60 and liquidity_tier in {"medium", "high"} and expected_return > 0:
         return "A", None
+    if sample_size >= 20 and historical_confidence >= 0.60 and expected_return > 0:
+        return "B", "insufficient_liquidity"
     if expected_return > 0:
         return ("B", "insufficient_empirical_evidence") if sample_size >= 5 else ("WATCH", "insufficient_empirical_evidence")
     return "REJECTED", "non_positive_expected_return"

@@ -1,6 +1,12 @@
 # Changelog
 ## Unreleased
 
+### Fixed
+
+- Restored divination-card provider-to-CFO liquidity evidence from the lowest observed input/reward market volume; missing or invalid volume remains gated and executable order-book depth is not treated as observed volume.
+- Preserved the route's Experimental lifecycle in allocator candidates and its existing 2% bankroll cap, without splitting an indivisible selected batch or widening allocation policy.
+- Distinguished insufficient liquidity from insufficient empirical samples while preserving shared tier thresholds, exact completed-history identity, freshness, patch, and executable-depth gates. Added an isolated HTTP/temp-database regression with explicitly controlled paper fixtures, not live profit claims.
+
 ## 0.9.1 — 2026-09-28
 
 ### Added
