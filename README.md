@@ -51,6 +51,8 @@ Use `.\DeusCFO.exe status`, `.\DeusCFO.exe restart`, and `.\DeusCFO.exe stop` to
 
 Requires Python 3.12 and Node.js 20 or newer:
 
+The Tailwind 4 frontend requires a modern browser: Chrome/Edge 111+, Firefox 128+, or Safari 16.4+.
+
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
