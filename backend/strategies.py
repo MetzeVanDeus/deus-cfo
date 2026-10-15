@@ -1205,8 +1205,16 @@ def _exact_price_info(
     grade = str(record.get("confidence_grade", "")).upper()
     confidence = record.get("confidence")
     confidence = float(confidence) if isinstance(confidence, (int, float)) else {"A": 1.0, "B": 0.8, "C": 0.6, "D": 0.4}.get(grade, 0.0)
+    volume = record.get("volume")
+    try:
+        volume = float(volume) if not isinstance(volume, bool) and isinstance(volume, (int, float)) else 0.0
+    except OverflowError:
+        volume = 0.0
+    if not math.isfinite(volume) or volume < 0:
+        volume = 0.0
     return {
         "price": float(price),
+        "volume": float(volume),
         "confidence": max(0.0, min(1.0, confidence)),
         "source": record.get("source", "request"),
         "observation_type": record.get("observation_type"),
@@ -1937,6 +1945,17 @@ class DivinationCardStrategyProvider:
                     "entry": float(baseline["input_cost_chaos"] - baseline["baseline_cost_chaos"]) if baseline else 0.0,
                     "exit": float(baseline["baseline_revenue_chaos"] - baseline["executable_output_chaos"]) if baseline else 0.0,
                 }
+            # Observed market volume is independent of executable order-book depth.
+            component_volumes = {
+                recipe["card_market_key"]: (card_price or {}).get("volume", 0.0),
+                **{
+                    outcome["reward_market_key"]: (
+                        reward_prices[index] or {}
+                    ).get("volume", 0.0) if index < len(reward_prices) else 0.0
+                    for index, outcome in enumerate(outcomes)
+                },
+            }
+            liquidity_volume = min(component_volumes.values())
             route = ProfitRoute(
                 transformation_id=recipe["id"], name=f"{recipe['card']} set arbitrage",
                 strategy_family="divination_card", status=status, league=league, category="DivinationCard",
@@ -1963,6 +1982,11 @@ class DivinationCardStrategyProvider:
                 safe_edge_ratio=float(executable_roi or 0),
                 safe_edge_adjustments=safe_adjustments,
                 evidence_legs=evidence_legs,
+                liquidity={
+                    "tier": validation.liquidity_tier(liquidity_volume),
+                    "volume": liquidity_volume,
+                    "components": component_volumes,
+                },
                 source=source, verified_version=recipe["verified_version"], poe_patch=recipe["poe_patch"],
                 verification_metadata={
                     "registry_version": self.registry.version, "registry_source": self.registry.source,
@@ -1993,7 +2017,7 @@ class DivinationCardStrategyProvider:
         chaos_per_divine = float(context.get("chaos_per_divine", 1) or 1)
         return [
             route.to_investable(
-                status="Validated",
+                status=str(route.verification_metadata["strategy_lifecycle"]),
                 max_batch=max(1, route.recommended_capacity),
                 bankroll=bankroll,
                 chaos_per_divine=chaos_per_divine,

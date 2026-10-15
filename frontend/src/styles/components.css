@@ -152,6 +152,7 @@
 .topbar-end {
   margin-left:auto;
   display:flex;
+  flex-shrink:0;
   align-items:center;
   gap:var(--sp-3);
   min-width:0;
@@ -1103,6 +1104,7 @@ a.btn-primary,a.btn-secondary {
 }
 .profit-routes {
   display:grid;
+  grid-template-columns:minmax(0,1fr);
   gap:var(--sp-3);
 }
 .profit-route {

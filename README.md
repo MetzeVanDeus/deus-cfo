@@ -51,6 +51,8 @@ Use `.\DeusCFO.exe status`, `.\DeusCFO.exe restart`, and `.\DeusCFO.exe stop` to
 
 Requires Python 3.12 and Node.js 20 or newer:
 
+The Tailwind 4 frontend requires a modern browser: Chrome/Edge 111+, Firefox 128+, or Safari 16.4+.
+
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
@@ -104,6 +106,8 @@ A route can remain theoretical or be absent when exact prices, buy-side depth, h
 Profit Routes preserves evidence for each input, cost, and output leg, including exact market key, quote side, source, timestamps, confidence, freshness policy, and any blocker. The optional minimum safe profit is measured in total Chaos per evaluated batch. The optional execution-bias percentage conservatively raises input fills and lowers output liquidation before budget, capacity, and batch-plan calculations. Known fees, output discounts, conversion friction, cumulative depth, and listing haircuts are reported separately and are not applied twice. Stale quotes hard-block executable capacity instead of receiving an invented numeric penalty; absent route history remains unavailable rather than becoming zero confidence.
 
 Executable routes can be captured before a manual paper or actual execution, then completed later with the observed total Chaos cost, revenue, and elapsed batch duration. The existing journal retains the exact route, league, registry version, patch, quote, planner, quantity unit, and batch size. Pending, corrected, and invalidated records remain visible; only completed, non-invalidated observations with an exact identity match contribute empirical return and duration samples. A changed current quote never rewrites a captured observation, and deterministic mechanics never replace the shared empirical allocator gates.
+
+Divination-card routes retain their **Experimental** lifecycle when passed to the CFO: an indivisible selected batch must fit the existing 2% bankroll cap or receive no allocation. Allocatable empirical tiers require sufficient exact completed observations, confidence, positive returns, and observed market volume on every input/reward leg. The lowest observed leg determines liquidity; missing, invalid, or non-finite volume stays low even when executable depth exists. Insufficient liquidity is reported separately from insufficient empirical samples. Order-book quantities never substitute for observed market volume.
 
 Completed route observations now calibrate entry-price premium, exit-price discount, and elapsed lock time with robust medians shrunk toward the unadjusted quote. Two exact-route observations are required because they match the route identity directly; family fallback requires five completed observations from independent peer routes to reduce cross-route noise. League, registry version, and PoE patch boundaries are exact, and equal-strength evidence prefers the exact route. The captured baseline always describes the same final selected batch before empirical calibration, so calibrated snapshots cannot compound their own adjustment. Planned active effort is not treated as observed elapsed time.
 

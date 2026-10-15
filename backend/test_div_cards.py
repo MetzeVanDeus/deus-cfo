@@ -2,6 +2,7 @@ import asyncio
 import json
 from datetime import datetime, timezone
 
+from fastapi.testclient import TestClient
 import collector
 import database
 import main
@@ -550,16 +551,16 @@ def test_profit_routes_fail_closed_without_matching_active_patch(monkeypatch):
     assert "the-doctor-to-headhunter" in stale["patch_reasons"][0]
 
 
-def test_capital_planning_receives_card_opportunity(monkeypatch, tmp_path):
+def test_provider_to_cfo_empirical_liquidity_and_experimental_cap(monkeypatch, tmp_path):
     rows = {
         "DivinationCard": [{
             "item_id": "test-card", "item_name": "Test Card", "price_chaos": 5,
-            "source": "test", "confidence_grade": "A",
+            "source": "controlled-fixture-not-live-profits", "confidence_grade": "A", "volume": 200,
             "buy_levels": [{"price": 6, "quantity": 4}], "fee_rate": 0, "observed_at": _RECENT_OBSERVED_AT, "confidence": 0.9,
         }],
         "Currency": [{
             "item_id": "test-orb", "item_name": "Test Orb", "price_chaos": 3,
-            "source": "test", "confidence_grade": "A",
+            "source": "controlled-fixture-not-live-profits", "confidence_grade": "A", "volume": 80,
             "sell_levels": [{"price": 3.5, "quantity": 10}], "fee_rate": 0.05, "observed_at": _RECENT_OBSERVED_AT, "confidence": 0.8,
         }],
     }
@@ -580,11 +581,81 @@ def test_capital_planning_receives_card_opportunity(monkeypatch, tmp_path):
     monkeypatch.setattr(main.strategies, "default_div_card_registry", lambda: DivCardRegistry([recipe()], version="3.0", source="test"))
     monkeypatch.setattr(main.capital, "build_capital_plan", build)
     request = main.CapitalPlanRequest(
-        league="Test", bankroll=main.capital.Bankroll(total_net_worth=10, liquid_currency=10),
+        league="Test", bankroll=main.capital.Bankroll(total_net_worth=200, liquid_currency=200),
         mode="PAPER", simulations=5,
     )
-    asyncio.run(main.create_capital_plan(request))
+    client = TestClient(main.app)
+    headers = {"host": "127.0.0.1:8000", "X-DeusCFO-Token": main.SESSION_TOKEN}
+    def plan():
+        response = client.post("/api/capital/plan", json=request.model_dump(), headers=headers)
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    assert plan()["positions"] == []
     card = next(item for item in captured["candidates"] if item.strategy_type == "divination_card")
+    assert card.rejection_reason == "missing_empirical_distribution"
+    route = strategies.ProfitRoute.model_validate(card.metadata["profit_route"])
+    async def seed_controlled_observations():
+        for _ in range(20):
+            execution = await main.portfolio.capture_route_execution(
+                opportunity_id=route.transformation_id, league="Test",
+                route_version=strategies.route_version(route), poe_patch=route.poe_patch,
+                quantity_unit="sets", route_snapshot=route.model_dump(mode="json"),
+                route_snapshot_id="controlled-fixture-not-live-profits",
+                execution_kind="paper", batch_count=1,
+                predicted_cost_chaos=24, predicted_revenue_chaos=33.25,
+                predicted_duration_hours=2,
+            )
+            await main.portfolio.complete_route_execution(
+                execution["id"], actual_cost_chaos=24,
+                actual_revenue_chaos=33.25, actual_duration_hours=2,
+            )
+    asyncio.run(seed_controlled_observations())
+    records = asyncio.run(main.portfolio.route_execution_records(league="Test"))
+    sparse = strategies.route_allocator_evidence(route, records[:5])
+    assert sparse["rejection_reasons"] == ["insufficient_empirical_evidence"]
+    wrong_patch = [{**record, "poe_patch": "other"} for record in records]
+    assert strategies.route_allocator_evidence(route, wrong_patch)["sample_size"] == 0
+    positive = plan()
+    card = next(item for item in captured["candidates"] if item.strategy_type == "divination_card")
+    evidence = card.metadata["route_evidence"]
+    assert evidence["sample_size"] == 20
+    assert evidence["historical_confidence"] > .60
+    assert evidence["eligible"] and card.tier == "A"
+    assert card.liquidity["volume"] == 80
+    assert card.liquidity["tier"] == "medium"
+    assert card.strategy_status == "Experimental"
+    assert card.metadata["verification_metadata"]["strategy_lifecycle"] == card.strategy_status
+    assert len(positive["positions"]) == 1
+    position = positive["positions"][0]
+    assert position["estimated_quantity"] == 1
+    assert position["capital"] == pytest.approx(2.4)
+    assert position["capital"] <= request.bankroll.total_net_worth * .02
+
+    # Selected complete sets cannot be partially funded to squeeze below 2%.
+    request.bankroll = main.capital.Bankroll(total_net_worth=100, liquid_currency=100)
+    assert plan()["positions"] == []
+    request.bankroll = main.capital.Bankroll(total_net_worth=200, liquid_currency=200)
+    request.league = "Other"
+    assert plan()["positions"] == []
+    request.league = "Test"
+    monkeypatch.setattr(main.strategies, "default_div_card_registry", lambda: DivCardRegistry(
+        [recipe(verified_version="other")], version="other", source="controlled-fixture",
+    ))
+    assert plan()["positions"] == []
+    monkeypatch.setattr(main.strategies, "default_div_card_registry", lambda: DivCardRegistry([recipe()], version="3.0", source="test"))
+    for volume in (None, 0, 49, True, "unknown", -1, float("nan"), float("inf"), 10**1000):
+        rows["Currency"][0]["volume"] = volume
+        negative = plan()
+        assert negative["positions"] == []
+        assert negative["rejected"]["test-card"] == "insufficient_liquidity"
+    rows["Currency"][0]["volume"] = 80
+    del rows["DivinationCard"][0]["volume"]
+    assert plan()["rejected"]["test-card"] == "insufficient_liquidity"
+    rows["DivinationCard"][0]["volume"] = 200
+    rows["DivinationCard"][0]["observed_at"] = "2020-01-01T00:00:00+00:00"
+    assert plan()["positions"] == []
+    rows["DivinationCard"][0]["observed_at"] = _RECENT_OBSERVED_AT
     assert card.metadata["capacity_units"] == "sets"
 
     for active_patch in (None, "3.29"):
